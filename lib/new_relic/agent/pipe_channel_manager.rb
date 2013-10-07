@@ -60,9 +60,10 @@ module NewRelic
         NUM_LENGTH_BYTES = 4
 
         attr_accessor :in, :out
-        attr_reader :last_read, :parent_pid
+        attr_reader :id, :last_read, :parent_pid
 
-        def initialize
+        def initialize(id = nil)
+          @id = id
           @out, @in = IO.pipe
           if defined?(::Encoding::ASCII_8BIT)
             @in.set_encoding(::Encoding::ASCII_8BIT)
@@ -142,7 +143,7 @@ module NewRelic
         end
 
         def register_pipe(id)
-          @pipes[id] = Pipe.new
+          @pipes[id] = Pipe.new(id)
           wakeup
         end
 
@@ -208,20 +209,35 @@ module NewRelic
 
         def merge_data_from_pipe(pipe_handle)
           pipe = find_pipe_for_handle(pipe_handle)
-          raw_payload = pipe.read
-          if raw_payload && !raw_payload.empty?
-            if raw_payload == Pipe::READY_MARKER
-              pipe.after_fork_in_parent
-            else
-              payload = unmarshal(raw_payload)
-              if payload
-                endpoint, items = payload
-                NewRelic::Agent.agent.merge_data_for_endpoint(endpoint, items)
+          return unless pipe
+
+          # Remove the pipe since it's going to be read from and shouldn't
+          # get processed until that completes
+          @pipes.delete(pipe.id)
+
+          # Start a new thread in order to allow multiple pipes to be read at once
+          Thread.new do
+            begin
+              raw_payload = pipe.read
+
+              if raw_payload && !raw_payload.empty?
+                if raw_payload == Pipe::READY_MARKER
+                  pipe.after_fork_in_parent
+                else
+                  payload = unmarshal(raw_payload)
+                  if payload
+                    endpoint, items = payload
+                    NewRelic::Agent.agent.merge_data_for_endpoint(endpoint, items)
+                  end
+                end
               end
+
+              pipe.close if pipe.eof?
+            ensure
+              # Always add the pipe back so that it can be cleaned up
+              @pipes[pipe.id] = pipe
             end
           end
-
-          pipe.close if pipe.eof?
         end
 
         def unmarshal(data)
