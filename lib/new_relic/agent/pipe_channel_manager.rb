@@ -260,7 +260,10 @@ module NewRelic
               pipe.close unless pipe.closed?
             end
           end
-          @pipes.reject! {|id, pipe| pipe.out.closed? }
+          @pipes.keys.each do |id|
+            pipe = @pipes[id]
+            @pipes.delete(id) if pipe && pipe.out.closed?
+          end
         end
 
         def find_pipe_for_handle(out_handle)
