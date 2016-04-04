@@ -50,8 +50,7 @@ module NewRelic
         FAILED_TO_OBFUSCATE_MESSAGE = "Failed to obfuscate SQL query - quote characters remained after obfuscation".freeze
 
         def obfuscate_single_quote_literals(sql)
-          return sql unless sql =~ COMPONENTS_REGEX_MAP[:single_quotes]
-          sql.gsub(COMPONENTS_REGEX_MAP[:single_quotes], PLACEHOLDER)
+          sql.gsub!(COMPONENTS_REGEX_MAP[:single_quotes], PLACEHOLDER) || sql
         end
 
         def self.generate_regex(dialect)

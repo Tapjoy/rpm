@@ -27,7 +27,7 @@ EOS
     "CHANGELOG",
     "LICENSE",
     "README.md",
-    "CONTRIBUTING.md",
+    "GUIDELINES_FOR_CONTRIBUTING.md",
     "newrelic.yml"
   ]
 
