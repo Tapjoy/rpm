@@ -174,15 +174,19 @@ module NewRelic
               NewRelic::Agent.record_metric('Supportability/Listeners',
                 (Time.now - now).to_f) if now
 
-              if ready = IO.select(pipes_to_listen_to, [], [], @select_timeout)
-                now = Time.now
+              begin
+                if ready = IO.select(pipes_to_listen_to, [], [], @select_timeout)
+                  now = Time.now
 
-                ready_pipes = ready[0]
-                ready_pipes.each do |pipe|
-                  merge_data_from_pipe(pipe) unless pipe == wake.out
+                  ready_pipes = ready[0]
+                  ready_pipes.each do |pipe|
+                    merge_data_from_pipe(pipe) unless pipe == wake.out
+                  end
+
+                  wake.out.read(1) if ready_pipes.include?(wake.out)
                 end
-
-                wake.out.read(1) if ready_pipes.include?(wake.out)
+              rescue IOError => ex
+                # Pipes need to be cleaned up before we can try again
               end
 
               break unless should_keep_listening?
