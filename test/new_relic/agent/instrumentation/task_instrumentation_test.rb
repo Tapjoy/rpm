@@ -47,6 +47,7 @@ class NewRelic::Agent::Instrumentation::TaskInstrumentationTest < Minitest::Test
   def test_should_run
     run_task_inner(0)
     assert_metrics_recorded_exclusive([
+      'Supportability/API/perform_action_with_newrelic_trace',
       'Controller/NewRelic::Agent::Instrumentation::TaskInstrumentationTest/inner_task_0',
       'Apdex/NewRelic::Agent::Instrumentation::TaskInstrumentationTest/inner_task_0',
       'HttpDispatcher',
@@ -138,16 +139,6 @@ class NewRelic::Agent::Instrumentation::TaskInstrumentationTest < Minitest::Test
     refute_nil(cpu_time, "cpu time nil: \n#{sample}")
     assert(cpu_time >= 0, "cpu time: #{cpu_time},\n#{sample}")
     assert_equal(10, attributes_for(sample, :agent)['request.parameters.level'])
-  end
-
-  def test_abort_transaction
-    perform_action_with_newrelic_trace(:name => 'hello', :force => true) do
-      self.class.inspect
-      NewRelic::Agent.abort_transaction!
-    end
-    # We record the controller metric still, but abort any transaction recording.
-    assert_metrics_recorded(['Controller/NewRelic::Agent::Instrumentation::TaskInstrumentationTest/hello'])
-    assert_nil(@agent.transaction_sampler.last_sample)
   end
 
   def test_perform_action_with_newrelic_trace_saves_params

@@ -7,15 +7,13 @@ module NewRelic
   module Agent
     module Instrumentation
       class MongodbCommandSubscriber
-
         MONGODB = 'MongoDB'.freeze
-        GET_MORE = "getMore".freeze
         COLLECTION = "collection".freeze
 
         def started(event)
           begin
             return unless NewRelic::Agent.tl_is_execution_traced?
-            operations[event.operation_id] = event
+            segments[event.operation_id] = start_segment event
           rescue Exception => e
             log_notification_error('started', e)
           end
@@ -25,15 +23,8 @@ module NewRelic
           begin
             state = NewRelic::Agent::TransactionState.tl_get
             return unless state.is_execution_traced?
-            started_event = operations.delete(event.operation_id)
-
-            base, *other_metrics = metrics(started_event)
-
-            NewRelic::Agent.instance.stats_engine.tl_record_scoped_and_unscoped_metrics(
-              base, other_metrics, event.duration
-            )
-
-            notice_nosql_statement(state, started_event, base, event.duration)
+            segment = segments.delete(event.operation_id)
+            segment.finish if segment
           rescue Exception => e
             log_notification_error('completed', e)
           end
@@ -44,16 +35,18 @@ module NewRelic
 
         private
 
-        def collection(event)
-          if event.command_name == GET_MORE
-            event.command[COLLECTION]
-          else
-            event.command.values.first
-          end
+        def start_segment event
+          host = host_from_address event.address
+          port_path_or_id = port_path_or_id_from_address event.address
+          segment = NewRelic::Agent::Transaction.start_datastore_segment(
+            MONGODB, event.command_name, collection(event), host, port_path_or_id, event.database_name
+          )
+          segment.notice_nosql_statement(generate_statement(event))
+          segment
         end
 
-        def metrics(event)
-          NewRelic::Agent::Datastores::MetricHelper.metrics_for(MONGODB, event.command_name, collection(event))
+        def collection(event)
+          event.command[COLLECTION] || event.command[:collection] || event.command.values.first
         end
 
         def log_notification_error(event_type, error)
@@ -61,8 +54,8 @@ module NewRelic
           NewRelic::Agent.logger.log_exception(:error, error)
         end
 
-        def operations
-          @operations ||= {}
+        def segments
+          @segments ||= {}
         end
 
         def generate_statement(event)
@@ -73,20 +66,35 @@ module NewRelic
           )
         end
 
-        def notice_nosql_statement(state, event, metric, duration)
-          end_time = Time.now.to_f
+        UNKNOWN = "unknown".freeze
+        LOCALHOST = "localhost".freeze
 
-          stack  = state.traced_method_stack
+        def host_from_address(address)
+          if unix_domain_socket? address.host
+            LOCALHOST
+          else
+            address.host
+          end
+        rescue => e
+          NewRelic::Agent.logger.debug "Failed to retrieve Mongo host: #{e}"
+          UNKNOWN
+        end
 
-          # enter transaction trace node
-          frame = stack.push_frame(state, :mongo_db, end_time - duration)
+        def port_path_or_id_from_address(address)
+          if unix_domain_socket? address.host
+            address.host
+          else
+            address.port
+          end
+        rescue => e
+          NewRelic::Agent.logger.debug "Failed to retrieve Mongo port_path_or_id: #{e}"
+          UNKNOWN
+        end
 
-          NewRelic::Agent.instance.transaction_sampler.notice_nosql_statement(
-              generate_statement(event), duration
-            )
+        SLASH = "/".freeze
 
-          # exit transaction trace node
-          stack.pop_frame(state, frame, metric, end_time)
+        def unix_domain_socket?(host)
+          host.start_with? SLASH
         end
       end
     end

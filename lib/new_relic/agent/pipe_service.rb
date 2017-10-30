@@ -68,16 +68,10 @@ module NewRelic
         yield
       end
 
-      def reset_metric_id_cache
-        # we don't cache metric IDs, so nothing to do
-      end
-
       private
 
       def marshal_payload(data)
-        NewRelic::LanguageSupport.with_cautious_gc do
-          Marshal.dump(data)
-        end
+        Marshal.dump(data)
       end
 
       def write_to_pipe(endpoint, data)

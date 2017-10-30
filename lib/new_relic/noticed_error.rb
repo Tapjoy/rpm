@@ -4,6 +4,7 @@
 
 require 'new_relic/helper'
 require 'new_relic/agent/attribute_filter'
+require 'new_relic/collection_helper'
 
 # This class encapsulates an error that was noticed by New Relic in a managed app.
 class NewRelic::NoticedError
@@ -15,12 +16,13 @@ class NewRelic::NoticedError
 
   attr_reader   :exception_id, :is_internal
 
-  STRIPPED_EXCEPTION_REPLACEMENT_MESSAGE = "Message removed by New Relic 'strip_exception_messages' setting"
+  STRIPPED_EXCEPTION_REPLACEMENT_MESSAGE = "Message removed by New Relic 'strip_exception_messages' setting".freeze
+  UNKNOWN_ERROR_CLASS_NAME = 'Error'.freeze
+  NIL_ERROR_MESSAGE = '<no message>'.freeze
 
   def initialize(path, exception, timestamp = Time.now)
     @exception_id = exception.object_id
     @path = path
-    @exception_class_name = exception.is_a?(Exception) ? exception.class.name : 'Error'
 
     # It's critical that we not hold onto the exception class constant in this
     # class. These objects get serialized for Resque to a process that might
@@ -28,22 +30,7 @@ class NewRelic::NoticedError
     # while we have the actual exception!
     @is_internal = (exception.class < NewRelic::Agent::InternalAgentError)
 
-    if exception.nil?
-      @message = '<no message>'
-    elsif exception.respond_to?('original_exception')
-      @message = (exception.original_exception || exception).to_s
-    else # exception is not nil, but does not respond to original_exception
-      @message = exception.to_s
-    end
-
-
-    unless @message.is_a?(String)
-      # In pre-1.9.3, Exception.new({}).to_s.class != String
-      # That is, Exception#to_s may not return a String instance if one wasn't
-      # passed in upon creation of the Exception. So, try to generate a useful
-      # String representation of the exception message, falling back to failsafe
-      @message = String(@message.inspect) rescue '<unknown message type>'
-    end
+    extract_class_name_and_message_from(exception)
 
     # clamp long messages to 4k so that we don't send a lot of
     # overhead across the wire
@@ -55,14 +42,9 @@ class NewRelic::NoticedError
       @message = STRIPPED_EXCEPTION_REPLACEMENT_MESSAGE
     end
 
+    @attributes_from_notice_error = nil
+    @attributes = nil
     @timestamp = timestamp
-  end
-
-  # @exception_class has been deprecated in favor of the more descriptive
-  # @exception_class_name.
-  # @deprecated
-  def exception_class
-    exception_class_name
   end
 
   def ==(other)
@@ -177,4 +159,18 @@ class NewRelic::NoticedError
   def intrinsic_attributes
     processed_attributes[INTRINSIC_ATTRIBUTES]
   end
+
+  def extract_class_name_and_message_from(exception)
+    if exception.nil?
+      @exception_class_name = UNKNOWN_ERROR_CLASS_NAME
+      @message = NIL_ERROR_MESSAGE
+    else
+      if defined?(Rails) && Rails::VERSION::MAJOR < 5 && exception.respond_to?(:original_exception)
+        exception = exception.original_exception || exception
+      end
+      @exception_class_name = exception.is_a?(Exception) ? exception.class.name : UNKNOWN_ERROR_CLASS_NAME
+      @message = exception.to_s
+    end
+  end
+
 end

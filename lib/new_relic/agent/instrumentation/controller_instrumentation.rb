@@ -38,15 +38,14 @@ module NewRelic
           def self.included(clazz)
             clazz.extend(ClassMethodsShim)
           end
-          def newrelic_notice_error(*args); end
           def new_relic_trace_controller_action(*args); yield; end
           def perform_action_with_newrelic_trace(*args); yield; end
         end
 
-        NR_DO_NOT_TRACE_KEY   = :'@do_not_trace'   unless defined?(NR_DO_NOT_TRACE_KEY  )
-        NR_IGNORE_APDEX_KEY   = :'@ignore_apdex'   unless defined?(NR_IGNORE_APDEX_KEY  )
-        NR_IGNORE_ENDUSER_KEY = :'@ignore_enduser' unless defined?(NR_IGNORE_ENDUSER_KEY)
-        NR_DEFAULT_OPTIONS    = {}.freeze          unless defined?(NR_DEFAULT_OPTIONS   )
+        NR_DO_NOT_TRACE_KEY   = :'@do_not_trace'
+        NR_IGNORE_APDEX_KEY   = :'@ignore_apdex'
+        NR_IGNORE_ENDUSER_KEY = :'@ignore_enduser'
+        NR_DEFAULT_OPTIONS    = {}.freeze
 
         # @api public
         module ClassMethods
@@ -56,6 +55,7 @@ module NewRelic
           # @api public
           #
           def newrelic_ignore(specifiers={})
+            NewRelic::Agent.record_api_supportability_metric(:newrelic_ignore)
             newrelic_ignore_aspect(NR_DO_NOT_TRACE_KEY, specifiers)
           end
           # Have NewRelic omit apdex measurements on the given actions.  Typically used for
@@ -65,11 +65,13 @@ module NewRelic
           # @api public
           #
           def newrelic_ignore_apdex(specifiers={})
+            NewRelic::Agent.record_api_supportability_metric(:newrelic_ignore_apdex)
             newrelic_ignore_aspect(NR_IGNORE_APDEX_KEY, specifiers)
           end
 
           # @api public
           def newrelic_ignore_enduser(specifiers={})
+            NewRelic::Agent.record_api_supportability_metric(:newrelic_ignore_enduser)
             newrelic_ignore_aspect(NR_IGNORE_ENDUSER_KEY, specifiers)
           end
 
@@ -99,7 +101,7 @@ module NewRelic
           end
 
           def newrelic_read_attr(attr_name) # :nodoc:
-            instance_variable_get(attr_name)
+            instance_variable_get(attr_name) if instance_variable_defined?(attr_name)
           end
 
           # Add transaction tracing to the given method.  This will treat
@@ -157,6 +159,8 @@ module NewRelic
           # @api public
           #
           def add_transaction_tracer(method, options={})
+            NewRelic::Agent.record_api_supportability_metric(:add_transaction_tracer)
+
             # The metric path:
             options[:name] ||= method.to_s
 
@@ -228,14 +232,15 @@ module NewRelic
           def self.prefix_for_category(txn, category = nil)
             category ||= (txn && txn.category)
             case category
-            when :controller then ::NewRelic::Agent::Transaction::CONTROLLER_PREFIX
-            when :task       then ::NewRelic::Agent::Transaction::TASK_PREFIX
-            when :rack       then ::NewRelic::Agent::Transaction::RACK_PREFIX
-            when :uri        then ::NewRelic::Agent::Transaction::CONTROLLER_PREFIX
-            when :sinatra    then ::NewRelic::Agent::Transaction::SINATRA_PREFIX
-            when :middleware then ::NewRelic::Agent::Transaction::MIDDLEWARE_PREFIX
-            when :grape      then ::NewRelic::Agent::Transaction::GRAPE_PREFIX
-            when :rake       then ::NewRelic::Agent::Transaction::RAKE_PREFIX
+            when :controller    then ::NewRelic::Agent::Transaction::CONTROLLER_PREFIX
+            when :task          then ::NewRelic::Agent::Transaction::TASK_PREFIX
+            when :rack          then ::NewRelic::Agent::Transaction::RACK_PREFIX
+            when :uri           then ::NewRelic::Agent::Transaction::CONTROLLER_PREFIX
+            when :sinatra       then ::NewRelic::Agent::Transaction::SINATRA_PREFIX
+            when :middleware    then ::NewRelic::Agent::Transaction::MIDDLEWARE_PREFIX
+            when :grape         then ::NewRelic::Agent::Transaction::GRAPE_PREFIX
+            when :rake          then ::NewRelic::Agent::Transaction::RAKE_PREFIX
+            when :action_cable  then ::NewRelic::Agent::Transaction::ACTION_CABLE_PREFIX
             else "#{category.to_s}/" # for internal use only
             end
           end
@@ -337,6 +342,7 @@ module NewRelic
         # @api public
         #
         def perform_action_with_newrelic_trace(*args, &block) #THREAD_LOCAL_ACCESS
+          NewRelic::Agent.record_api_supportability_metric(:perform_action_with_newrelic_trace)
           state = NewRelic::Agent::TransactionState.tl_get
           state.request = newrelic_request(args)
 
@@ -356,7 +362,7 @@ module NewRelic
           txn_options   = create_transaction_options(trace_options, category, state)
 
           begin
-            txn = Transaction.start(state, category, txn_options)
+            Transaction.start(state, category, txn_options)
 
             begin
               yield
@@ -366,10 +372,6 @@ module NewRelic
             end
 
           ensure
-            if txn
-              txn.ignore_apdex!   if ignore_apdex?
-              txn.ignore_enduser! if ignore_enduser?
-            end
             Transaction.stop(state)
           end
         end
@@ -383,7 +385,7 @@ module NewRelic
             opts[:request]
           # in a Rails app
           elsif self.respond_to?(:request)
-            self.request
+            self.request rescue nil
           end
         end
 
@@ -425,11 +427,13 @@ module NewRelic
         def create_transaction_options(trace_options, category, state)
           txn_options = {}
           txn_options[:request]   = trace_options[:request]
-          txn_options[:request] ||= request if respond_to?(:request)
+          txn_options[:request] ||= request if respond_to?(:request) rescue nil
           # params should have been filtered before calling perform_action_with_newrelic_trace
           txn_options[:filtered_params] = trace_options[:params]
           txn_options[:transaction_name] = TransactionNamer.name_for(nil, self, category, trace_options)
           txn_options[:apdex_start_time] = detect_queue_start_time(state)
+          txn_options[:ignore_apdex] = ignore_apdex?
+          txn_options[:ignore_enduser] = ignore_enduser?
           txn_options
         end
 

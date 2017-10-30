@@ -29,10 +29,10 @@ module NewRelic
     require 'new_relic/metrics'
     require 'new_relic/metric_spec'
     require 'new_relic/metric_data'
-    require 'new_relic/collection_helper'
     require 'new_relic/noticed_error'
-    require 'new_relic/timer_lib'
+    require 'new_relic/supportability_helper'
 
+    require 'new_relic/agent/encoding_normalizer'
     require 'new_relic/agent/stats'
     require 'new_relic/agent/chained_call'
     require 'new_relic/agent/cross_app_monitor'
@@ -48,6 +48,7 @@ module NewRelic
     require 'new_relic/agent/busy_calculator'
     require 'new_relic/agent/sampler'
     require 'new_relic/agent/database'
+    require 'new_relic/agent/datastores'
     require 'new_relic/agent/pipe_channel_manager'
     require 'new_relic/agent/configuration'
     require 'new_relic/agent/rules_engine'
@@ -55,9 +56,6 @@ module NewRelic
     require 'new_relic/agent/system_info'
 
     require 'new_relic/agent/instrumentation/controller_instrumentation'
-
-    # this is a shim that's here only for backwards compatibility
-    require 'new_relic/agent/instrumentation/metric_frame'
 
     require 'new_relic/agent/samplers/cpu_sampler'
     require 'new_relic/agent/samplers/memory_sampler'
@@ -67,6 +65,8 @@ module NewRelic
     require 'set'
     require 'thread'
     require 'resolv'
+
+    extend NewRelic::SupportabilityHelper
 
     # An exception that is thrown by the server if the agent license is invalid.
     class LicenseException < StandardError; end
@@ -123,17 +123,14 @@ module NewRelic
       @logger = log
     end
 
-    # This needs to come after the definition of the logger method above, since
-    # instantiating the config writes to the Logger.
-
-    @config = NewRelic::Agent::Configuration::Manager.new
-
-    attr_reader :config
+    def config
+      @config ||= Configuration::Manager.new
+    end
 
     # For testing
     # Important that we don't change the instance or we orphan callbacks
     def reset_config
-      @config.reset_to_defaults
+      config.reset_to_defaults
     end
 
     # @!group Recording custom metrics
@@ -155,6 +152,8 @@ module NewRelic
     #
     # @api public
     def record_metric(metric_name, value) #THREAD_LOCAL_ACCESS
+      record_api_supportability_metric(:record_metric)
+
       return unless agent
 
       if value.is_a?(Hash)
@@ -182,8 +181,8 @@ module NewRelic
     def increment_metric(metric_name, amount=1) #THREAD_LOCAL_ACCESS
       return unless agent
 
-      agent.stats_engine.tl_record_unscoped_metrics(metric_name) do |stats|
-        stats.increment_count(amount)
+      { 'Supportability/API/increment_metric' => 1,  metric_name => amount }.each do |metric, increment_amount|
+        agent.stats_engine.tl_record_unscoped_metrics(metric) {|stats| stats.increment_count(increment_amount) }
       end
     end
 
@@ -203,6 +202,8 @@ module NewRelic
     # @api public
     #
     def ignore_error_filter(&block)
+      record_api_supportability_metric(:ignore_error_filter)
+
       if block
         NewRelic::Agent::ErrorCollector.ignore_error_filter = block
       else
@@ -210,20 +211,43 @@ module NewRelic
       end
     end
 
-    # Notice the error with the given available options:
+    # Send an error to New Relic.
     #
-    # * <tt>:uri</tt> => Request path, minus request params or query string
-    # * <tt>:metric</tt> => The metric name associated with the transaction
-    # * <tt>:custom_params</tt> => Custom parameters
+    # @param [Exception] exception Error you wish to send
+    # @param [Hash]      options Modify how New Relic processes the error
+    # @option options [Hash]    :custom_params Custom parameters to attach to the trace
+    # @option options [Boolean] :expected Only record the error trace
+    #                           (do not affect error rate or Apdex status)
+    # @option options [String]  :uri Request path, minus request params or query string
+    #                           (usually not needed)
+    # @option options [String]  :metric Metric name associated with the transaction
+    #                           (usually not needed)
     #
-    # Previous versions of the agent allowed passing :request_params but
-    # those are now ignored. Associate the request with the enclosing
-    # transaction, or record additional information as custom attributes.
-    # Anything left over is treated as custom params.
+    # Any option keys other than the ones listed here are treated as
+    # <code>:custom_params</code>.
+    #
+    # *Note:* Previous versions of the agent allowed passing
+    # <code>:request_params</code>, but those are now ignored.  If you
+    # need to record the request parameters, call this method inside a
+    # transaction or pass the information in
+    # <code>:custom_params</code>.
+    #
+    # Most of the time, you do not need to specify the
+    # <code>:uri</code> or <code>:metric</code> options; only pass
+    # them if you are calling <code>notice_error</code> outside a
+    # transaction.
     #
     # @api public
     #
     def notice_error(exception, options={})
+      record_api_supportability_metric(:notice_error)
+
+      if options.has_key?(:trace_only)
+        NewRelic::Agent.logger.log_once(:warn, :trace_only_deprecated,
+          'Passing the :trace_only option to NewRelic::Agent.notice_error is deprecated. Please use :expected instead.')
+        options[:expected] = options.delete(:trace_only)
+      end
+
       Transaction.notice_error(exception, options)
       nil # don't return a noticed error datastructure. it can only hurt.
     end
@@ -257,9 +281,12 @@ module NewRelic
     # @api public
     #
     def record_custom_event(event_type, event_attrs)
+      record_api_supportability_metric(:record_custom_event)
+
       if agent && NewRelic::Agent.config[:'custom_insights_events.enabled']
         agent.custom_event_aggregator.record(event_type, event_attrs)
       end
+
       nil
     end
 
@@ -285,10 +312,9 @@ module NewRelic
     # @api public
     #
     def manual_start(options={})
+      record_api_supportability_metric(:manual_start)
+
       raise "Options must be a hash" unless Hash === options
-      if options[:start_channel_listener]
-        NewRelic::Agent::PipeChannelManager.listener.start
-      end
       NewRelic::Control.instance.init_plugin({ :agent_enabled => true, :sync_startup => true }.merge(options))
     end
 
@@ -318,6 +344,7 @@ module NewRelic
     # @api public
     #
     def after_fork(options={})
+      record_api_supportability_metric(:after_fork)
       agent.after_fork(options) if agent
     end
 
@@ -329,6 +356,7 @@ module NewRelic
     # @api public
     #
     def shutdown(options={})
+      record_api_supportability_metric(:shutdown)
       agent.shutdown if agent
     end
 
@@ -338,6 +366,7 @@ module NewRelic
     # @api public
     def drop_buffered_data
       agent.drop_buffered_data if agent
+      record_api_supportability_metric(:drop_buffered_data)
     end
 
     # Add instrumentation files to the agent.  The argument should be
@@ -350,6 +379,7 @@ module NewRelic
     # @api public
     #
     def add_instrumentation(file_pattern)
+      record_api_supportability_metric(:add_instrumentation)
       NewRelic::Control.instance.add_instrumentation file_pattern
     end
 
@@ -357,8 +387,8 @@ module NewRelic
     #
     # @api public
     def require_test_helper
-      path = File.join(__FILE__, '..', '..', '..', 'test', 'agent_helper')
-      require File.expand_path(path)
+      record_api_supportability_metric(:require_test_helper)
+      require File.expand_path('../../../test/agent_helper', __FILE__)
     end
 
     # This method sets the block sent to this method as a sql
@@ -378,6 +408,7 @@ module NewRelic
     # @api public
     #
     def set_sql_obfuscator(type = :replace, &block)
+      record_api_supportability_metric(:set_sql_obfuscator)
       NewRelic::Agent::Database.set_sql_obfuscator(type, &block)
     end
 
@@ -392,6 +423,7 @@ module NewRelic
     # @api public
     #
     def ignore_transaction
+      record_api_supportability_metric(:ignore_transaction)
       txn = NewRelic::Agent::Transaction.tl_current
       txn.ignore! if txn
     end
@@ -402,6 +434,7 @@ module NewRelic
     # @api public
     #
     def ignore_apdex
+      record_api_supportability_metric(:ignore_apdex)
       txn = NewRelic::Agent::Transaction.tl_current
       txn.ignore_apdex! if txn
     end
@@ -412,6 +445,7 @@ module NewRelic
     # @api public
     #
     def ignore_enduser
+      record_api_supportability_metric(:ignore_enduser)
       txn = NewRelic::Agent::Transaction.tl_current
       txn.ignore_enduser! if txn
     end
@@ -424,6 +458,8 @@ module NewRelic
     # @api public
     #
     def disable_all_tracing
+      record_api_supportability_metric(:disable_all_tracing)
+
       return yield unless agent
 
       begin
@@ -440,6 +476,8 @@ module NewRelic
     # @api public
     #
     def disable_transaction_tracing
+      record_api_supportability_metric(:disable_transaction_tracing)
+
       return yield unless agent
 
       state = agent.set_record_tt(false)
@@ -462,6 +500,8 @@ module NewRelic
     # @api public
     #
     def disable_sql_recording
+      record_api_supportability_metric(:disable_sql_recording)
+
       return yield unless agent
 
       state = agent.set_record_sql(false)
@@ -504,6 +544,8 @@ module NewRelic
     # @api public
     #
     def add_custom_attributes(params) #THREAD_LOCAL_ACCESS
+      record_api_supportability_metric(:add_custom_attributes)
+
       if params.is_a? Hash
         txn = Transaction.tl_current
         txn.add_custom_attributes(params) if txn
@@ -540,6 +582,7 @@ module NewRelic
     # @api public
     #
     def set_transaction_name(name, options={})
+      record_api_supportability_metric(:set_transaction_name)
       Transaction.set_overriding_transaction_name(name, options[:category])
     end
 
@@ -549,6 +592,8 @@ module NewRelic
     # @api public
     #
     def get_transaction_name #THREAD_LOCAL_ACCESS
+      record_api_supportability_metric(:get_transaction_name)
+
       txn = Transaction.tl_current
       if txn
         namer = Instrumentation::ControllerInstrumentation::TransactionNamer
@@ -606,105 +651,10 @@ module NewRelic
     # @api public
     #
     def browser_timing_header
+      record_api_supportability_metric(:browser_timing_header)
+
       return "" unless agent
       agent.javascript_instrumentor.browser_timing_header
-    end
-
-    # @!endgroup
-
-    # @!group Deprecated methods
-
-    # In previous agent releases, this method was required for manual RUM
-    # instrumentation. That work is now all done by the browser_timing_header
-    # method, but this is left for compatibility.
-    #
-    # @api public
-    # @deprecated
-    #
-    def browser_timing_footer
-      ""
-    end
-
-    ADD_CUSTOM_ATTRIBUTES  = "NewRelic::Agent.add_custom_attributes".freeze
-    ADD_CUSTOM_PARAMETERS  = "NewRelic::Agent.add_custom_parameters".freeze
-    ADD_REQUEST_PARAMETERS = "NewRelic::Agent.add_request_parameters".freeze
-    SET_USER_ATTRIBUTES    = "NewRelic::Agent.set_user_attributes".freeze
-
-    # Deprecated. Use add_custom_attributes instead.
-    #
-    # @deprecated
-    # @api public
-    #
-    def add_custom_parameters(*args)
-      NewRelic::Agent::Deprecator.deprecate(ADD_CUSTOM_PARAMETERS, ADD_CUSTOM_ATTRIBUTES)
-      add_custom_attributes(*args)
-    end
-
-    # Deprecated. Use add_custom_attributes instead.
-    #
-    # @deprecated
-    # @api public
-    #
-    def add_request_parameters(*args)
-      NewRelic::Agent::Deprecator.deprecate(ADD_REQUEST_PARAMETERS, ADD_CUSTOM_ATTRIBUTES)
-      add_custom_attributes(*args)
-    end
-
-    # Deprecated. Use add_custom_attributes instead.
-    #
-    # @deprecated
-    # @api public
-    #
-    def set_user_attributes(*args)
-      NewRelic::Agent::Deprecator.deprecate(SET_USER_ATTRIBUTES, ADD_CUSTOM_ATTRIBUTES)
-      add_custom_attributes(*args)
-    end
-
-    # Get or create a statistics gatherer that will aggregate numerical data
-    # under a metric name.
-    #
-    # +metric_name+ should follow a slash separated path convention. Application
-    # specific metrics should begin with "Custom/".
-    #
-    # Return a NewRelic::Agent::Stats that accepts data
-    # via calls to add_data_point(value).
-    #
-    # This method is deprecated in favor of record_metric and increment_metric,
-    # and is not thread-safe.
-    #
-    # @api public
-    # @deprecated
-    #
-    def get_stats(metric_name, use_scope=false)
-      return unless agent
-      agent.stats_engine.get_stats(metric_name, use_scope)
-    end
-
-    alias get_stats_no_scope get_stats
-
-    # Deprecated in favor of drop_buffered_data
-    #
-    # @api public
-    # @deprecated
-    def reset_stats; drop_buffered_data; end
-
-    # Cancel the collection of the current transaction in progress, if
-    # any.  Only affects the transaction started on this thread once
-    # it has started and before it has completed.
-    #
-    # This method has been deprecated in favor of ignore_transaction,
-    # which does what people expect this method to do.
-    #
-    # @api public
-    # @deprecated
-    #
-    def abort_transaction!
-      Transaction.abort_transaction!
-    end
-
-    # Remove after 5/9/15
-    def record_transaction(*args)
-      NewRelic::Agent.logger.warn('This method has been deprecated, please see https://docs.newrelic.com/docs/ruby/ruby-agent-api for current API documentation.')
     end
 
     # @!endgroup

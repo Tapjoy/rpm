@@ -40,17 +40,20 @@ module NewRelic
         # placeholder.
         CLEANUP_REGEX = {
           :mysql => /'|"|\/\*|\*\//,
+          :mysql2 => /'|"|\/\*|\*\//,
           :postgres => /'|\/\*|\*\/|\$(?!\?)/,
           :sqlite => /'|\/\*|\*\//,
           :cassandra => /'|\/\*|\*\//,
-          :oracle => /'|\/\*|\*\//
+          :oracle => /'|\/\*|\*\//,
+          :oracle_enhanced => /'|\/\*|\*\//
         }
 
         PLACEHOLDER = '?'.freeze
         FAILED_TO_OBFUSCATE_MESSAGE = "Failed to obfuscate SQL query - quote characters remained after obfuscation".freeze
 
         def obfuscate_single_quote_literals(sql)
-          sql.gsub!(COMPONENTS_REGEX_MAP[:single_quotes], PLACEHOLDER) || sql
+          return sql unless sql =~ COMPONENTS_REGEX_MAP[:single_quotes]
+          sql.gsub(COMPONENTS_REGEX_MAP[:single_quotes], PLACEHOLDER)
         end
 
         def self.generate_regex(dialect)
@@ -67,13 +70,13 @@ module NewRelic
 
         def obfuscate(sql, adapter)
           case adapter
-          when :mysql
+          when :mysql, :mysql2
             regex = MYSQL_COMPONENTS_REGEX
           when :postgres
             regex = POSTGRES_COMPONENTS_REGEX
           when :sqlite
             regex = SQLITE_COMPONENTS_REGEX
-          when :oracle
+          when :oracle, :oracle_enhanced
             regex = ORACLE_COMPONENTS_REGEX
           when :cassandra
             regex = CASSANDRA_COMPONENTS_REGEX

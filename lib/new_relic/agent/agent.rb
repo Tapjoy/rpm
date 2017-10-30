@@ -71,8 +71,11 @@ module NewRelic
         @connect_state      = :pending
         @connect_attempts   = 0
         @environment_report = nil
+        @waited_on_connect  = nil
+        @connected_pid      = nil
 
-        @wait_on_connect_reader, @wait_on_connect_writer = IO.pipe
+        @wait_on_connect_mutex = Mutex.new
+        @wait_on_connect_condition = ConditionVariable.new
 
         setup_attribute_filter
       end
@@ -374,32 +377,15 @@ module NewRelic
 
           def should_install_exit_handler?
             (
-              Agent.config[:send_data_on_exit]                  &&
-              !NewRelic::LanguageSupport.using_engine?('jruby') &&
+              Agent.config[:send_data_on_exit]  &&
               !sinatra_classic_app?
             )
-          end
-
-          # There's an MRI 1.9 bug that loses exit codes in at_exit blocks.
-          # A workaround is necessary to get correct exit codes for the agent's
-          # test suites.
-          # http://bugs.ruby-lang.org/issues/5218
-          def need_exit_code_workaround?
-            defined?(RUBY_ENGINE) && RUBY_ENGINE == "ruby" && RUBY_VERSION.match(/^1\.9/)
           end
 
           def install_exit_handler
             return unless should_install_exit_handler?
             NewRelic::Agent.logger.debug("Installing at_exit handler")
-            at_exit do
-              if need_exit_code_workaround?
-                exit_status = $!.status if $!.is_a?(SystemExit)
-                shutdown
-                exit exit_status if exit_status
-              else
-                shutdown
-              end
-            end
+            at_exit { shutdown }
           end
 
           # Classy logging of the agent version and the current pid,
@@ -472,7 +458,7 @@ module NewRelic
           end
 
           def in_resque_child_process?
-            @service.is_a?(NewRelic::Agent::PipeService)
+            defined?(@service) && @service.is_a?(NewRelic::Agent::PipeService)
           end
 
           # Sanity-check the agent configuration and start the agent,
@@ -533,14 +519,6 @@ module NewRelic
             return false
           end
 
-          unless NewRelic::Agent::NewRelicService::JsonMarshaller.is_supported?
-            NewRelic::Agent.logger.error "JSON marshaller requested, but the 'json' gem was not available. ",
-              "You will need to: 1) upgrade to Ruby 1.9.3 or newer (strongly recommended), ",
-              "2) add the 'json' gem to your Gemfile or operating environment, ",
-              "or 3) use a version of newrelic_rpm prior to 3.14.0."
-            return false
-          end
-
           return true
         end
 
@@ -565,12 +543,10 @@ module NewRelic
           @transaction_event_recorder.drop_buffered_data
           @custom_event_aggregator.reset!
           @sql_sampler.reset!
+          if Agent.config[:clear_transaction_state_after_fork]
+            TransactionState.tl_clear
+          end
         end
-
-        # Deprecated, and not part of the public API, but here for backwards
-        # compatibility because some 3rd-party gems call it.
-        # @deprecated
-        def reset_stats; drop_buffered_data; end
 
         # Clear out state for any objects that we know lock from our parents
         # This is necessary for cases where we're in a forked child and Ruby
@@ -730,8 +706,8 @@ module NewRelic
           # number of attempts we've made to contact the server
           attr_accessor :connect_attempts
 
-          # Disconnect just sets connected to false, which prevents
-          # the agent from trying to connect again
+          # Disconnect just sets the connect state to disconnected, preventing
+          # further retries.
           def disconnect
             @connect_state = :disconnected
             true
@@ -818,24 +794,20 @@ module NewRelic
           def connect_settings
             sanitize_environment_report
 
-            settings = {
-              :pid => $$,
-              :host => local_host,
-              :display_host => Agent.config[:'process_host.display_name'],
-              :app_name => Agent.config.app_names,
-              :language => 'ruby',
-              :labels => Agent.config.parsed_labels,
+            {
+              :pid           => $$,
+              :host          => local_host,
+              :display_host  => Agent.config[:'process_host.display_name'],
+              :app_name      => Agent.config.app_names,
+              :language      => 'ruby',
+              :labels        => Agent.config.parsed_labels,
               :agent_version => NewRelic::VERSION::STRING,
-              :environment => @environment_report,
-              :settings => Agent.config.to_collector_hash,
-              :high_security => Agent.config[:high_security]
+              :environment   => @environment_report,
+              :settings      => Agent.config.to_collector_hash,
+              :high_security => Agent.config[:high_security],
+              :utilization   => UtilizationData.new.to_collector_hash,
+              :identifier    => "ruby:#{local_host}:#{Agent.config.app_names.sort.join(',')}"
             }
-
-            unless Agent.config[:disable_utilization]
-              settings[:utilization] = UtilizationData.new.to_collector_hash
-            end
-
-            settings
           end
 
           # Returns connect data passed back from the server
@@ -891,7 +863,9 @@ module NewRelic
           end
 
           def signal_connected
-            @wait_on_connect_writer << "."
+            @wait_on_connect_mutex.synchronize do
+              @wait_on_connect_condition.signal
+            end
           end
 
           def wait_on_connect(timeout)
@@ -899,7 +873,10 @@ module NewRelic
 
             @waited_on_connect = true
             NewRelic::Agent.logger.debug("Waiting on connect to complete.")
-            IO.select([@wait_on_connect_reader], nil, nil, timeout)
+
+            @wait_on_connect_mutex.synchronize do
+              @wait_on_connect_condition.wait(@wait_on_connect_mutex, timeout)
+            end
 
             unless connected?
               raise WaitOnConnectTimeout, "Agent was unable to connect in #{timeout} seconds."
@@ -952,22 +929,24 @@ module NewRelic
 
         public :merge_data_for_endpoint
 
-        # Connect to the server and validate the license.  If successful,
-        # connected? returns true when finished.  If not successful, you can
-        # keep calling this.  Return false if we could not establish a
-        # connection with the server and we should not retry, such as if
-        # there's a bad license key.
+        # Establish a connection to New Relic servers.
         #
-        # Set keep_retrying=false to disable retrying and return asap, such as when
-        # invoked in the foreground.  Otherwise this runs until a successful
-        # connection is made, or the server rejects us.
+        # By default, if a connection has already been established, this method
+        # will be a no-op.
         #
-        # * <tt>:keep_retrying => false</tt> to only try to connect once, and
-        #   return with the connection set to nil.  This ensures we may try again
-        #   later (default true).
-        # * <tt>force_reconnect => true</tt> if you want to establish a new connection
-        #   to the server before running the worker loop.  This means you get a separate
-        #   agent run and New Relic sees it as a separate instance (default is false).
+        # @param [Hash] options
+        # @option options [Boolean] :keep_retrying (true)
+        #   If true, this method will block until a connection is successfully
+        #   established, continuing to retry upon failure. If false, this method
+        #   will return after either successfully connecting, or after failing
+        #   once.
+        #
+        # @option options [Boolean] :force_reconnect (false)
+        #   If true, this method will force establishment of a new connection
+        #   with New Relic, even if there is already an existing connection.
+        #   This is useful primarily when re-establishing a new connection after
+        #   forking off from a parent process.
+        #
         def connect(options={})
           defaults = {
             :keep_retrying => Agent.config[:keep_retrying],
@@ -995,8 +974,6 @@ module NewRelic
             ::NewRelic::Agent.logger.info "Will re-attempt in #{connect_retry_period} seconds"
             sleep connect_retry_period
             retry
-          else
-            disconnect
           end
         rescue Exception => e
           ::NewRelic::Agent.logger.error "Exception of unexpected type during Agent#connect():", e
@@ -1033,7 +1010,7 @@ module NewRelic
         #    drop any stored data and reset to a clean state.
         #
         #  #merge!(payload)
-        #    merge the given pyalod back into the internal buffer of the
+        #    merge the given payload back into the internal buffer of the
         #    container, so that it may be harvested again later.
         #
         def harvest_and_send_from_container(container, endpoint)

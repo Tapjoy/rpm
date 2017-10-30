@@ -26,6 +26,7 @@ namespace :newrelic do
       sections = flatten_config_hash(config_hash)
 
       puts build_erb(format).result(binding)
+      sections # silences unused warning to return this
     end
 
     def build_config_hash

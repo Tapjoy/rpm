@@ -24,7 +24,7 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection_name = "tribbles-#{SecureRandom.hex(16)}"
             @collection = @database.collection(@collection_name)
 
-            @tribbles = [{'name' => 'soterios johnson'}, {'name' => 'wes mantooth'}]
+            @tribbles = [{'name' => 'soterios johnson', 'count' => 1}, {'name' => 'wes mantooth', 'count' => 2}]
 
             NewRelic::Agent::Transaction.stubs(:recording_web_transaction?).returns(true)
             NewRelic::Agent.drop_buffered_data
@@ -36,18 +36,22 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
           end
 
           def test_records_metrics_for_insert_one
-            @collection.insert_one(@tribbles.first)
+            in_transaction do
+              @collection.insert_one(@tribbles.first)
+            end
 
-            metrics = build_test_metrics(:insert)
+            metrics = build_test_metrics(:insert, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
           end
 
           def test_records_metrics_for_insert_many
-            @collection.insert_many(@tribbles)
+            in_transaction do
+              @collection.insert_many(@tribbles)
+            end
 
-            metrics = build_test_metrics(:insert)
+            metrics = build_test_metrics(:insert, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -57,9 +61,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
             NewRelic::Agent.drop_buffered_data
 
-            @collection.delete_one(@tribbles.first)
+            in_transaction do
+              @collection.delete_one(@tribbles.first)
+            end
 
-            metrics = build_test_metrics(:delete)
+            metrics = build_test_metrics(:delete, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -69,9 +75,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
             NewRelic::Agent.drop_buffered_data
 
-            @collection.delete_many(@tribbles.first)
+            in_transaction do
+              @collection.delete_many(@tribbles.first)
+            end
 
-            metrics = build_test_metrics(:delete)
+            metrics = build_test_metrics(:delete, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -81,9 +89,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
             NewRelic::Agent.drop_buffered_data
 
-            @collection.replace_one(@tribbles[0], @tribbles[1])
+            in_transaction do
+              @collection.replace_one(@tribbles[0], @tribbles[1])
+            end
 
-            metrics = build_test_metrics(:update)
+            metrics = build_test_metrics(:update, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -93,9 +103,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
             NewRelic::Agent.drop_buffered_data
 
-            @collection.update_one(@tribbles[0], "$set" => @tribbles[1])
+            in_transaction do
+              @collection.update_one(@tribbles[0], "$set" => @tribbles[1])
+            end
 
-            metrics = build_test_metrics(:update)
+            metrics = build_test_metrics(:update, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -105,9 +117,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
             NewRelic::Agent.drop_buffered_data
 
-            @collection.update_many(@tribbles[0], "$set" => @tribbles[1])
+            in_transaction do
+              @collection.update_many(@tribbles[0], "$set" => @tribbles[1])
+            end
 
-            metrics = build_test_metrics(:update)
+            metrics = build_test_metrics(:update, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -117,9 +131,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
             NewRelic::Agent.drop_buffered_data
 
-            @collection.find(@tribbles.first).to_a
+            in_transaction do
+              @collection.find(@tribbles.first).to_a
+            end
 
-            metrics = build_test_metrics(:find)
+            metrics = build_test_metrics(:find, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -129,9 +145,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
             NewRelic::Agent.drop_buffered_data
 
-            @collection.find_one_and_delete(@tribbles.first)
+            in_transaction do
+              @collection.find_one_and_delete(@tribbles.first)
+            end
 
-            metrics = build_test_metrics(:findandmodify)
+            metrics = build_test_metrics(:findandmodify, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -141,9 +159,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
             NewRelic::Agent.drop_buffered_data
 
-            @collection.find_one_and_replace(@tribbles[0], @tribbles[1])
+            in_transaction do
+              @collection.find_one_and_replace(@tribbles[0], @tribbles[1])
+            end
 
-            metrics = build_test_metrics(:findandmodify)
+            metrics = build_test_metrics(:findandmodify, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -153,30 +173,84 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
             NewRelic::Agent.drop_buffered_data
 
-            @collection.find_one_and_update(@tribbles[0], "$set" => @tribbles[1])
+            in_transaction do
+              @collection.find_one_and_update(@tribbles[0], "$set" => @tribbles[1])
+            end
 
-            metrics = build_test_metrics(:findandmodify)
+            metrics = build_test_metrics(:findandmodify, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
           end
 
           def test_records_metrics_for_distinct
-            @collection.distinct('name')
+            in_transaction do
+              @collection.distinct('name')
+            end
 
-            metrics = build_test_metrics(:distinct)
+            metrics = build_test_metrics(:distinct, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
           end
 
           def test_records_metrics_for_count
-            @collection.count
+            in_transaction do
+              @collection.count
+            end
 
-            metrics = build_test_metrics(:count)
+            metrics = build_test_metrics(:count, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
+          end
+
+          def test_records_metrics_for_aggregate
+            in_transaction do
+              @collection.aggregate([
+                {'$group' => {'_id' => "name", "max" => {'$max'=>"$count"}}},
+                {'$match' => {'max' => {'$gte' => 1}}}
+              ]).to_a
+            end
+
+            metrics = build_test_metrics(:aggregate, true)
+            expected = metrics_with_attributes(metrics)
+
+            assert_metrics_recorded(expected)
+          end
+
+          def test_aggregate_pipeline_obfuscated_by_default
+            in_transaction do
+              @collection.aggregate([
+                {'$group' => {'_id' => "name", "max" => {'$max'=>"$count"}}},
+                {'$match' => {'max' => {'$gte' => 1}}}
+              ]).to_a
+            end
+
+            sample = NewRelic::Agent.instance.transaction_sampler.last_sample
+            metric = "Datastore/statement/MongoDB/#{@collection_name}/aggregate"
+            node = find_node_with_name(sample, metric)
+
+            expected = [
+              {"$group"=>{"_id"=>"?", "max"=>{"$max"=>"?"}}},
+              {"$match"=>{"max"=>{"$gte"=>"?"}}}
+            ]
+
+            assert_equal expected, node[:statement]["pipeline"]
+          end
+
+          def test_filter_obfuscated_by_default
+            in_transaction do
+              @collection.find("name" => "Wes Mantooth", "count" => {"$gte" => 1}).to_a
+            end
+
+            sample = NewRelic::Agent.instance.transaction_sampler.last_sample
+            metric = "Datastore/statement/MongoDB/#{@collection_name}/find"
+            node = find_node_with_name(sample, metric)
+
+            expected = {"name"=>"?", "count"=>{"$gte"=>"?"}}
+
+            assert_equal expected, node[:statement]["filter"]
           end
 
           def test_batched_queries
@@ -185,17 +259,24 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             end
             NewRelic::Agent.drop_buffered_data
 
-            @collection.find(:active => true).batch_size(10).to_a
+            in_transaction("test_txn") do
+              @collection.find(:active => true).batch_size(10).to_a
+            end
 
             expected = {
+              "test_txn" => {:call_count=>1},
+              ["Datastore/statement/MongoDB/#{@collection_name}/find", "test_txn"] => {:call_count=>1},
               "Datastore/statement/MongoDB/#{@collection_name}/find" => {:call_count=>1},
+              ["Datastore/statement/MongoDB/#{@collection_name}/getMore", "test_txn"] => {:call_count=>2},
               "Datastore/statement/MongoDB/#{@collection_name}/getMore" => {:call_count=>2},
               "Datastore/operation/MongoDB/find" => {:call_count=>1},
               "Datastore/operation/MongoDB/getMore" => {:call_count=>2},
+              "Datastore/instance/MongoDB/#{NewRelic::Agent::Hostname.get}/27017" => {:call_count=>3},
               "Datastore/MongoDB/allWeb" => {:call_count=>3},
               "Datastore/MongoDB/all" => {:call_count=>3},
               "Datastore/allWeb" => { :call_count=>3},
-              "Datastore/all" => {:call_count=>3}
+              "Datastore/all" => {:call_count=>3},
+              "Supportability/API/drop_buffered_data" => { :call_count => 1 }
             }
             assert_metrics_recorded_exclusive expected
           end
@@ -224,10 +305,27 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             assert_equal expected, actual
           end
 
-          def test_drop_collection
-            @collection.drop
+          def test_trace_nodes_have_instance_attributes
+            @collection.insert_one :name => "test", :active => true
+            NewRelic::Agent.drop_buffered_data
+            in_transaction "webby" do
+              @collection.find(:active => true).to_a
+            end
 
-            metrics = build_test_metrics(:drop)
+            trace = last_transaction_trace
+            node = find_node_with_name_matching trace, /^Datastore\//
+
+            assert_equal NewRelic::Agent::Hostname.get, node[:host]
+            assert_equal '27017', node[:port_path_or_id]
+            assert_equal @database_name, node[:database_name]
+          end
+
+          def test_drop_collection
+            in_transaction do
+              @collection.drop
+            end
+
+            metrics = build_test_metrics(:drop, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -240,11 +338,6 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
 
             metric = statement_metric(:insert)
             assert_metrics_recorded([[metric, "webby"]])
-          end
-
-          def statement_metric(action)
-            metrics = build_test_metrics(action)
-            metrics.select { |m| m.start_with?("Datastore/statement") }.first
           end
 
           def test_background_scoped_metrics
@@ -270,12 +363,13 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
               :collection => @collection_name,
               'insert' => @collection_name,
               :operation  => :insert,
-              'writeConcern' => { :w => 1 },
               'ordered' => true
             }
 
             result = node.params[:statement]
-
+            # the writeConcern is added by some, but not all versions of the mongo driver,
+            # we don't care if it's present or not, just that the statement is noticed
+            result.delete('writeConcern')
             assert_equal expected, result
           end
 
@@ -351,9 +445,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
 
           def test_web_requests_record_all_web_metric
             NewRelic::Agent::Transaction.stubs(:recording_web_transaction?).returns(true)
-            @collection.insert_one(@tribbles.first)
+            in_web_transaction do
+              @collection.insert_one(@tribbles.first)
+            end
 
-            metrics = build_test_metrics(:insert)
+            metrics = build_test_metrics(:insert, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -361,16 +457,20 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
 
           def test_web_requests_do_not_record_all_other_metric
             NewRelic::Agent::Transaction.stubs(:recording_web_transaction?).returns(true)
-            @collection.insert_one(@tribbles.first)
+            in_background_transaction do
+              @collection.insert_one(@tribbles.first)
+            end
 
             assert_metrics_not_recorded(['Datastore/allOther'])
           end
 
           def test_other_requests_record_all_other_metric
             NewRelic::Agent::Transaction.stubs(:recording_web_transaction?).returns(false)
-            @collection.insert_one(@tribbles.first)
+            in_transaction do
+              @collection.insert_one(@tribbles.first)
+            end
 
-            metrics = build_test_metrics(:insert)
+            metrics = build_test_metrics(:insert, true)
             expected = metrics_with_attributes(metrics)
 
             assert_metrics_recorded(expected)
@@ -381,6 +481,11 @@ if NewRelic::Agent::Datastores::Mongo.is_supported_version? &&
             @collection.insert_one(@tribbles.first)
 
             assert_metrics_not_recorded(['Datastore/allWeb'])
+          end
+
+          def statement_metric(action)
+            metrics = build_test_metrics(action, true)
+            metrics.select { |m| m.start_with?("Datastore/statement") }.first
           end
         end
       end

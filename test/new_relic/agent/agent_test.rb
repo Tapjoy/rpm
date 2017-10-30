@@ -205,7 +205,7 @@ module NewRelic
         nthreads.times do |tid|
           t = Thread.new do
             nmetrics.times do |mid|
-              @agent.stats_engine.get_stats("m#{mid}").record_data_point(1)
+              @agent.stats_engine.tl_record_unscoped_metrics("m#{mid}", 1)
             end
           end
           t.abort_on_exception = true
@@ -265,7 +265,7 @@ module NewRelic
 
         # This method should NOT increment error counts, since that has already
         # been counted in the child
-        assert_equal 0, @agent.stats_engine.get_stats("Errors/all").call_count
+        assert_metrics_not_recorded "Errors/all"
       end
 
       def test_harvest_and_send_analytic_event_data_merges_in_samples_on_failure
@@ -311,7 +311,6 @@ module NewRelic
       def test_connect_does_not_retry_if_keep_retrying_false
         @agent.service.expects(:connect).once.raises(Timeout::Error)
         @agent.send(:connect, :keep_retrying => false)
-        assert(@agent.disconnected?)
       end
 
       def test_connect_does_not_retry_on_license_error
@@ -389,7 +388,8 @@ module NewRelic
          :agent_version,
          :environment,
          :settings,
-         :high_security
+         :high_security,
+         :identifier
         ]
 
         expected.each do |expect_key|

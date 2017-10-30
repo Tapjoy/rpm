@@ -17,14 +17,14 @@ class NewRelic::Agent::ErrorCollectorTest < Minitest::Test
     @error_collector = NewRelic::Agent::ErrorCollector.new
     @error_collector.stubs(:enabled).returns(true)
 
-    NewRelic::Agent::TransactionState.tl_clear_for_testing
+    NewRelic::Agent::TransactionState.tl_clear
     NewRelic::Agent.instance.stats_engine.reset!
   end
 
   def teardown
     super
     NewRelic::Agent::ErrorCollector.ignore_error_filter = nil
-    NewRelic::Agent::TransactionState.tl_clear_for_testing
+    NewRelic::Agent::TransactionState.tl_clear
     NewRelic::Agent.config.reset_to_defaults
   end
 
@@ -46,17 +46,6 @@ class NewRelic::Agent::ErrorCollectorTest < Minitest::Test
 
     assert_equal 1, traces.length
     assert_equal 1, events.length
-  end
-
-  def test_drops_deprecated_options
-    expects_logging(:warn, any_parameters)
-    error = @error_collector.create_noticed_error(StandardError.new("message"),
-                                  :referer => "lalalalala",
-                                  :request => stub('request'),
-                                  :request_params => {:x => 'y'})
-
-
-    assert_empty error.attributes_from_notice_error
   end
 
   def test_exclude
@@ -124,12 +113,18 @@ class NewRelic::Agent::ErrorCollectorTest < Minitest::Test
   end
 
   def test_increments_count_on_errors
-    expects_error_count_increase(1) do
-      @error_collector.notice_error(StandardError.new("Boo"))
-    end
+    @error_collector.notice_error(StandardError.new("Boo"))
+    assert_metrics_recorded(
+      'Errors/all' => { :call_count => 1}
+    )
+
+    @error_collector.notice_error(StandardError.new("Boo"))
+    assert_metrics_recorded(
+      'Errors/all' => { :call_count => 2}
+    )
   end
 
-  def test_increment_error_count_record_summary_and_txn_metric
+  def test_increment_error_count_record_summary_and_web_txn_metric
     in_web_transaction('Controller/class/method') do
       @error_collector.increment_error_count!(NewRelic::Agent::TransactionState.tl_get, StandardError.new('Boo'))
     end
@@ -139,7 +134,7 @@ class NewRelic::Agent::ErrorCollectorTest < Minitest::Test
                              'Errors/Controller/class/method'])
   end
 
-  def test_increment_error_count_record_summary_and_txn_metric
+  def test_increment_error_count_record_summary_and_other_txn_metric
     in_background_transaction('OtherTransaction/AnotherFramework/Job/perform') do
       @error_collector.increment_error_count!(NewRelic::Agent::TransactionState.tl_get, StandardError.new('Boo'))
     end
@@ -250,17 +245,15 @@ class NewRelic::Agent::ErrorCollectorTest < Minitest::Test
   end
 
   def test_extract_stack_trace
-    exception = mock('exception', :original_exception => nil,
-                                  :backtrace => nil)
-
-    assert_equal('<no stack trace>', @error_collector.extract_stack_trace(exception))
+    assert_equal('<no stack trace>', @error_collector.extract_stack_trace(Exception.new))
   end
 
-  def test_extract_stack_trace_positive
-    orig = mock('original', :backtrace => "STACK STACK STACK")
-    exception = mock('exception', :original_exception => orig)
-
-    assert_equal('STACK STACK STACK', @error_collector.extract_stack_trace(exception))
+  if defined?(Rails) && Rails::VERSION::MAJOR < 5
+    def test_extract_stack_trace_from_original_exception
+      orig = mock('original', :backtrace => "STACK STACK STACK")
+      exception = mock('exception', :original_exception => orig)
+      assert_equal('STACK STACK STACK', @error_collector.extract_stack_trace(exception))
+    end
   end
 
   def test_skip_notice_error_is_true_if_the_error_collector_is_disabled
@@ -367,17 +360,32 @@ class NewRelic::Agent::ErrorCollectorTest < Minitest::Test
     end
   end
 
+  def test_expected_error_does_not_increment_metrics
+    @error_collector.notice_error(StandardError.new, :expected => true)
+    traces = harvest_error_traces
+    events = harvest_error_events
+
+    assert_equal 1, traces.length
+    assert_equal 1, events.length
+    assert_metrics_not_recorded ['Errors/all']
+  end
+
+  def test_expected_error_not_recorded_as_custom_attribute
+    @error_collector.notice_error(StandardError.new, :expected => true)
+    traces = harvest_error_traces
+    events = harvest_error_events
+
+    assert_equal 1, traces.length
+    assert_equal 1, events.length
+
+    event_attrs = events[0][1]
+    refute event_attrs.key?("expected"), "Unexpected attribute expected found in custom attributes"
+
+    trace_attrs = traces[0].attributes_from_notice_error
+    refute trace_attrs.key?(:expected), "Unexpected attribute expected found in custom attributes"
+  end
+
   private
-
-  def expects_error_count_increase(increase)
-    count = get_error_stats
-    yield
-    assert_equal increase, get_error_stats - count
-  end
-
-  def get_error_stats
-    NewRelic::Agent.get_stats("Errors/all").call_count
-  end
 
   def wrapped_filter_proc
     Proc.new do |e|

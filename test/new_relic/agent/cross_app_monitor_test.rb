@@ -157,7 +157,7 @@ module NewRelic::Agent
 
       when_request_runs(for_id(''))
 
-      assert_metrics_recorded_exclusive(['transaction'])
+      assert_metrics_recorded_exclusive(['transaction', 'Supportability/API/drop_buffered_data'])
     end
 
     def test_setting_response_headers_freezes_transaction_name
@@ -241,7 +241,7 @@ module NewRelic::Agent
 
     def unpacked_response
       return nil unless response_app_data
-      NewRelic::JSONWrapper.load(Base64.decode64(response_app_data))
+      ::JSON.load(Base64.decode64(response_app_data))
     end
 
   end

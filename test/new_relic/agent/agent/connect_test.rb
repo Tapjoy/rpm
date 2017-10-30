@@ -24,14 +24,7 @@ class NewRelic::Agent::Agent::ConnectTest < Minitest::Test
     NewRelic::Agent.instance.service = @service
     @local_host = nil
 
-    @test_config = { :developer_mode => true }
     NewRelic::Agent.reset_config
-    NewRelic::Agent.config.add_config_for_testing(@test_config)
-  end
-
-  def teardown
-    NewRelic::Agent.reset_config
-    NewRelic::Agent.config.remove_config(@test_config)
   end
 
   def control
@@ -108,17 +101,27 @@ class NewRelic::Agent::Agent::ConnectTest < Minitest::Test
   end
 
   def test_connect_settings
-    NewRelic::Agent.config.expects(:app_names).returns(["apps"])
+    NewRelic::Agent.config.expects(:app_names).twice.returns(["apps"])
     @local_host = "lo-calhost"
     @environment_report = {}
 
-    keys = %w(pid host display_host app_name language agent_version environment settings).map(&:to_sym)
+    keys = %w(pid host identifier display_host app_name language agent_version environment settings).map(&:to_sym)
 
     settings = connect_settings
     keys.each do |k|
       assert_includes(settings.keys, k)
       refute_nil(settings[k], "expected a value for #{k}")
     end
+  end
+
+  def test_connect_settings_includes_correct_identifier
+    NewRelic::Agent.config.expects(:app_names).twice.returns(["b", "a", "c"])
+    @local_host = "lo-calhost"
+    @environment_report = {}
+
+    settings = connect_settings
+
+    assert_equal settings[:identifier], "ruby:lo-calhost:a,b,c"
   end
 
   def test_configure_transaction_tracer_positive
@@ -129,16 +132,14 @@ class NewRelic::Agent::Agent::ConnectTest < Minitest::Test
 
   def test_configure_transaction_tracer_negative
     with_config(:'transaction_tracer.enabled' => false) do
-      assert @transaction_sampler.enabled?
+      refute @transaction_sampler.enabled?
     end
   end
 
   def test_configure_transaction_tracer_server_disabled
     config = NewRelic::Agent::Configuration::ServerSource.new('collect_traces' => false)
-    with_config(:developer_mode => false) do
-      with_config(config) do
-        refute @transaction_sampler.enabled?
-      end
+    with_config(config) do
+      refute @transaction_sampler.enabled?
     end
   end
 
