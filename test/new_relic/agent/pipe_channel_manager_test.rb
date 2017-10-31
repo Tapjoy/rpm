@@ -19,7 +19,7 @@ class NewRelic::Agent::PipeChannelManagerTest < Minitest::Test
     NewRelic::Agent::PipeChannelManager.instance_variable_set(:@listener, listener)
 
     NewRelic::Agent.manual_start
-    NewRelic::Agent::TransactionState.tl_clear_for_testing
+    NewRelic::Agent::TransactionState.tl_clear
   end
 
   def teardown
@@ -40,42 +40,40 @@ class NewRelic::Agent::PipeChannelManagerTest < Minitest::Test
     NewRelic::Agent::PipeChannelManager.listener.close_all_pipes
   end
 
-  if NewRelic::LanguageSupport.can_fork? && !NewRelic::LanguageSupport.using_version?('1.9.1')
+  if NewRelic::LanguageSupport.can_fork?
     def test_listener_merges_timeslice_metrics
       metric = 'Custom/test/method'
-      engine = NewRelic::Agent.agent.stats_engine
-      engine.get_stats_no_scope(metric).record_data_point(1.0)
+
+      NewRelic::Agent.record_metric(metric, 1.0)
 
       start_listener_with_pipe(666)
 
       run_child(666) do
         NewRelic::Agent.after_fork
         new_engine = NewRelic::Agent::StatsEngine.new
-        new_engine.get_stats_no_scope(metric).record_data_point(2.0)
+        new_engine.tl_record_unscoped_metrics(metric, 2.0)
         service = NewRelic::Agent::PipeService.new(666)
         service.metric_data(new_engine.harvest!)
       end
 
       assert_metrics_recorded(metric => { :total_call_time => 3.0 })
-      engine.reset!
     end
 
     def test_listener_merges_transaction_traces
       sampler = NewRelic::Agent.agent.transaction_sampler
-      sample = run_sample_trace
-      assert_equal(1, sampler.count)
+      assert_equal(0, sampler.count)
 
       start_listener_with_pipe(667)
       run_child(667) do
         NewRelic::Agent.after_fork
         with_config(:'transaction_tracer.transaction_threshold' => 0.0) do
-          sample = run_sample_trace
+          in_transaction {}
           service = NewRelic::Agent::PipeService.new(667)
           service.transaction_sample_data(sampler.harvest!)
         end
       end
 
-      assert_equal(2, sampler.count)
+      assert_equal(1, sampler.count)
     end
 
     def test_listener_merges_error_traces
@@ -259,10 +257,6 @@ class NewRelic::Agent::PipeChannelManagerTest < Minitest::Test
   end
 
   def test_listener_pipes_race_condition
-    # 1.8.7 doesn't have easy singleton_class access, but also doesn't have
-    # races thanks to green threads and the GIL, so pitch it!
-    return if RUBY_VERSION < "1.9.2"
-
     begin
       listener = NewRelic::Agent::PipeChannelManager.listener
       listener.instance_variable_set(:@select_timeout, 0.00001)

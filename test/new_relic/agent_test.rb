@@ -14,18 +14,22 @@ module NewRelic
 
     def setup
       NewRelic::Agent.drop_buffered_data
-      NewRelic::Agent.manual_start
       NewRelic::Agent.reset_config
       NewRelic::Agent.instance.stubs(:start_worker_thread)
     end
 
     def teardown
-      NewRelic::Agent::TransactionState.tl_clear_for_testing
+      NewRelic::Agent::TransactionState.tl_clear
     end
 
     def test_shutdown
-      mock_agent = mocked_agent
+      mock_agent  = mocked_agent
+      mock_engine = mock
+      mock_stats  = mock
       mock_agent.expects(:shutdown)
+      mock_agent.expects(:stats_engine).returns(mock_engine)
+      mock_engine.expects(:tl_record_unscoped_metrics).with('Supportability/API/shutdown').yields(mock_stats)
+      mock_stats.expects(:increment_count)
       NewRelic::Agent.shutdown
     end
 
@@ -59,15 +63,14 @@ module NewRelic
     end
 
     def test_after_fork
-      mock_agent = mocked_agent
+      mock_agent  = mocked_agent
+      mock_engine = mock
+      mock_stats  = mock
       mock_agent.expects(:after_fork).with({})
+      mock_agent.expects(:stats_engine).returns(mock_engine)
+      mock_engine.expects(:tl_record_unscoped_metrics).yields(mock_stats)
+      mock_stats.expects(:increment_count)
       NewRelic::Agent.after_fork
-    end
-
-    def test_reset_stats
-      mock_agent = mocked_agent
-      mock_agent.expects(:drop_buffered_data)
-      NewRelic::Agent.reset_stats
     end
 
     def test_manual_start_default
@@ -98,23 +101,7 @@ module NewRelic
 
         NewRelic::Agent.manual_start
       end
-    end
-
-    def test_get_stats
-      agent = mocked_agent
-      mock_stats_engine = mock('stats_engine')
-      agent.expects(:stats_engine).returns(mock_stats_engine)
-      mock_stats_engine.expects(:get_stats).with('Custom/test/metric', false)
-      NewRelic::Agent.get_stats('Custom/test/metric')
-    end
-
-    # note that this is the same as get_stats above, they're just aliases
-    def test_get_stats_no_scope
-      agent = mocked_agent
-      mock_stats_engine = mock('stats_engine')
-      agent.expects(:stats_engine).returns(mock_stats_engine)
-      mock_stats_engine.expects(:get_stats).with('Custom/test/metric', false)
-      NewRelic::Agent.get_stats_no_scope('Custom/test/metric')
+      NewRelic::Agent.shutdown
     end
 
     def test_agent_logs_warning_when_not_started
@@ -135,11 +122,6 @@ module NewRelic
       NewRelic::Agent.instance_eval { @agent = 'not nil' }
       assert_equal('not nil', NewRelic::Agent.agent, "should return the value from @agent")
       NewRelic::Agent.instance_eval { @agent = old_agent }
-    end
-
-    def test_abort_transaction_bang
-      NewRelic::Agent::Transaction.expects(:abort_transaction!)
-      NewRelic::Agent.abort_transaction!
     end
 
     def test_is_transaction_traced_true
@@ -195,6 +177,7 @@ module NewRelic
     def test_instance
       NewRelic::Agent.manual_start
       assert_equal(NewRelic::Agent.agent, NewRelic::Agent.instance, "should return the same agent for both identical methods")
+      NewRelic::Agent.shutdown
     end
 
     def test_register_report_channel
@@ -206,6 +189,7 @@ module NewRelic
 
     def test_record_metric
       dummy_engine = NewRelic::Agent.agent.stats_engine
+      dummy_engine.expects(:tl_record_unscoped_metrics).with('Supportability/API/record_metric')
       dummy_engine.expects(:tl_record_unscoped_metrics).with('foo', 12)
       NewRelic::Agent.record_metric('foo', 12)
     end
@@ -226,6 +210,7 @@ module NewRelic
       expected_stats.min_call_time = 1
       expected_stats.max_call_time = 5
       expected_stats.sum_of_squares = 999
+      dummy_engine.expects(:tl_record_unscoped_metrics).with('Supportability/API/record_metric')
       dummy_engine.expects(:tl_record_unscoped_metrics).with('foo', expected_stats)
       NewRelic::Agent.record_metric('foo', stats_hash)
     end
@@ -246,6 +231,7 @@ module NewRelic
       expected_stats.max_call_time = 5
       expected_stats.sum_of_squares = 999
 
+      dummy_engine.expects(:tl_record_unscoped_metrics).with('Supportability/API/record_metric')
       dummy_engine.expects(:tl_record_unscoped_metrics).with('foo', expected_stats)
       NewRelic::Agent.record_metric('foo', incomplete_stats_hash)
     end
@@ -253,11 +239,13 @@ module NewRelic
     def test_increment_metric
       dummy_engine = NewRelic::Agent.agent.stats_engine
       dummy_stats = mock
+      dummy_stats.expects(:increment_count).with(1)
       dummy_stats.expects(:increment_count).with(12)
+      dummy_engine.expects(:tl_record_unscoped_metrics).with('Supportability/API/increment_metric').yields(dummy_stats)
       dummy_engine.expects(:tl_record_unscoped_metrics).with('foo').yields(dummy_stats)
       NewRelic::Agent.increment_metric('foo', 12)
     end
-
+    
     class Transactor
       include NewRelic::Agent::Instrumentation::ControllerInstrumentation
       def txn
@@ -387,6 +375,14 @@ module NewRelic
       end
     end
 
+    def test_notice_error_deprecates_trace_only
+      log = with_array_logger(:warn) do
+        NewRelic::Agent.notice_error(StandardError.new, { trace_only: true })
+      end
+
+      assert log.array.any? {|msg| msg.include?('Passing the :trace_only option to NewRelic::Agent.notice_error is deprecated. Please use :expected instead') }
+    end
+
     def test_eventing_helpers
       called = false
       NewRelic::Agent.subscribe(:boo) { called = true }
@@ -419,19 +415,36 @@ module NewRelic
       end
     end
 
-    def test_add_custom_parameters_deprecated
-      NewRelic::Agent::Deprecator.expects(:deprecate)
-      NewRelic::Agent.add_custom_parameters(:is => "bunk")
-    end
+    def test_modules_and_classes_return_name_properly
+      valid = [Module, Class]
+      stack = [NewRelic]
 
-    def test_add_request_parameters_deprecated
-      NewRelic::Agent::Deprecator.expects(:deprecate)
-      NewRelic::Agent.add_request_parameters(:is => "bunk")
-    end
+      loop do
+        a = stack.pop
 
-    def test_set_user_attributes_deprecated
-      NewRelic::Agent::Deprecator.expects(:deprecate)
-      NewRelic::Agent.set_user_attributes(:is => "bunk")
+        if a.respond_to? :name
+          b = if RUBY_VERSION < '2.0.0'
+                a.name.split('::').reduce(nil) { |c,n| (c || Kernel).const_get n }
+              else
+                Kernel.const_get a.name
+              end
+          assert_equal a, b
+        end
+
+        if a.respond_to? :constants
+          consts = a.constants.map { |c| a.const_get c }.select do |c|
+            if valid.include?(c.class) && !c.ancestors.include?(Minitest::Test)
+              assert_instance_of String, c.name
+              c.name.start_with?(a.name)
+            else
+              false
+            end
+          end
+          stack.concat consts
+        end
+
+        break if stack.empty?
+      end
     end
 
     private

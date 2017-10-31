@@ -20,7 +20,7 @@ class NewRelic::Agent::TransactionTest < Minitest::Test
   end
 
   def cleanup_transaction
-    NewRelic::Agent::TransactionState.tl_clear_for_testing
+    NewRelic::Agent::TransactionState.tl_clear
   end
 
   def test_request_parsing_none
@@ -680,13 +680,6 @@ class NewRelic::Agent::TransactionTest < Minitest::Test
     end
   end
 
-  def test_user_attributes_alias_to_custom_parameters
-    in_transaction('user_attributes') do |txn|
-      txn.set_user_attributes(:set_instance => :set_instance)
-      assert_has_custom_attribute(txn, "set_instance")
-    end
-  end
-
   def test_notice_error_in_current_transaction_saves_it_for_finishing
     in_transaction('failing') do |txn|
       NewRelic::Agent::Transaction.notice_error("")
@@ -885,11 +878,10 @@ class NewRelic::Agent::TransactionTest < Minitest::Test
   end
 
   def with_java_classes_loaded
-    # class_variable_set is private on 1.8.7 :(
-    ::NewRelic::Agent::Transaction.send(:class_variable_set, :@@java_classes_loaded, true)
+    ::NewRelic::Agent::Transaction.class_variable_set :@@java_classes_loaded, true
     yield
   ensure
-    ::NewRelic::Agent::Transaction.send(:class_variable_set, :@@java_classes_loaded, false)
+    ::NewRelic::Agent::Transaction.class_variable_set :@@java_classes_loaded, false
   end
 
   def test_cpu_burn_normal
@@ -1061,6 +1053,17 @@ class NewRelic::Agent::TransactionTest < Minitest::Test
     assert_metrics_not_recorded(['Controller/boom'])
   end
 
+  def test_start_ignores_transactions_from_ignored_paths
+    with_config(:rules => { :ignore_url_regexes => ['ignored/path'] }) do
+      req = mock('request')
+      req.stubs(:path).returns('ignored/path')
+
+      in_transaction(request: req) do |txn|
+        assert txn.ignore?
+      end
+    end
+  end
+
   def test_stop_safe_from_exceptions
     NewRelic::Agent::Transaction.any_instance.stubs(:stop).raises("Haha")
     expects_logging(:error, any_parameters)
@@ -1086,15 +1089,6 @@ class NewRelic::Agent::TransactionTest < Minitest::Test
       in_transaction do |txn|
         txn.stubs(:request_path).returns(rule + '/path')
         assert txn.user_defined_rules_ignore?, "Paths should be ignored based on user defined rules. Rule: '#{rule}', Path: '#{txn.request_path}'."
-      end
-    end
-  end
-
-  def test_stop_ignores_transactions_from_ignored_paths
-    with_config(:rules => { :ignore_url_regexes => ['ignored/path'] }) do
-      in_transaction do |txn|
-        txn.stubs(:request_path).returns('ignored/path')
-        txn.expects(:ignore!)
       end
     end
   end
@@ -1480,5 +1474,52 @@ class NewRelic::Agent::TransactionTest < Minitest::Test
 
       assert txn.payload[:error], "Expected error to be recorded"
     end
+  end
+
+  def test_nesting_max_depth_increments
+    state = NewRelic::Agent::TransactionState.tl_get
+
+    txn = in_transaction do |t|
+      assert_equal 1, t.nesting_max_depth
+      NewRelic::Agent::Transaction.start state, :other, :transaction_name => "inner_1"
+      assert_equal 2, t.nesting_max_depth
+      NewRelic::Agent::Transaction.start state, :other, :transaction_name => "inner_2"
+      assert_equal 3, t.nesting_max_depth
+      NewRelic::Agent::Transaction.stop(state)
+      NewRelic::Agent::Transaction.stop(state)
+    end
+
+    assert_equal 3, txn.nesting_max_depth
+  end
+
+  def test_set_transaction_name_for_nested_transactions
+    state = NewRelic::Agent::TransactionState.tl_get
+
+    in_web_transaction "Controller/Framework/webby" do |t|
+      NewRelic::Agent::Transaction.start state, :controller, :transaction_name => "Controller/Framework/inner_1"
+      NewRelic::Agent::Transaction.start state, :controller, :transaction_name => "Controller/Framework/inner_2"
+      segment = NewRelic::Agent::Transaction.start_segment "Ruby/my_lib/my_meth"
+      NewRelic::Agent.set_transaction_name "RackFramework/action"
+      segment.finish
+      NewRelic::Agent::Transaction.stop(state)
+      NewRelic::Agent::Transaction.stop(state)
+    end
+
+    assert_metrics_recorded_exclusive [
+      "Controller/RackFramework/action",
+      "HttpDispatcher",
+      "Apdex",
+      "ApdexAll",
+      "Apdex/RackFramework/action",
+      "Nested/Controller/Framework/webby",
+      "Nested/Controller/Framework/inner_1",
+      "Nested/Controller/RackFramework/action",
+      "Ruby/my_lib/my_meth",
+      "Supportability/API/set_transaction_name",
+      ["Nested/Controller/Framework/webby", "Controller/RackFramework/action"],
+      ["Nested/Controller/Framework/inner_1", "Controller/RackFramework/action"],
+      ["Nested/Controller/RackFramework/action", "Controller/RackFramework/action"],
+      ["Ruby/my_lib/my_meth", "Controller/RackFramework/action"]
+    ]
   end
 end

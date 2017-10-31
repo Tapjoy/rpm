@@ -46,7 +46,7 @@ module MultiverseHelpers
     # (the test case instance itself)
     self.instance_exec($collector, &block) if block_given? && self.respond_to?(:instance_exec)
 
-    # It's important that this is called after the insance_exec above, so that
+    # It's important that this be called after the instance_exec above, so that
     # test cases have the chance to change settings on the fake collector first
     start_fake_collector unless omit_collector?
 
@@ -72,7 +72,7 @@ module MultiverseHelpers
     NewRelic::Agent.instance.error_collector.instance_variable_set(:@ignore_filter, nil)
 
     # Clean up any thread-local variables starting with 'newrelic'
-    NewRelic::Agent::TransactionState.tl_clear_for_testing
+    NewRelic::Agent::TransactionState.tl_clear
 
     NewRelic::Agent.instance.transaction_sampler.reset!
 
@@ -176,7 +176,7 @@ module MultiverseHelpers
     raw_attributes = @js_data["atts"]
 
     if raw_attributes
-      attributes = NewRelic::JSONWrapper.load @instrumentor.obfuscator.deobfuscate(raw_attributes)
+      attributes = ::JSON.load @instrumentor.obfuscator.deobfuscate(raw_attributes)
       @js_custom_attributes = attributes['u']
       @js_agent_attributes = attributes['a']
     end

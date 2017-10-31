@@ -140,7 +140,7 @@ module NewRelic
       # @api public
       # @deprecated Use {Datastores.notice_sql} instead.
       #
-      def notice_sql(sql, metric_name, config, duration, state=nil, explainer=nil) #THREAD_LOCAL_ACCESS sometimes
+      def notice_sql(sql, metric_name, config, duration, state=nil, explainer=nil, binds=nil, name=nil) #THREAD_LOCAL_ACCESS sometimes
         state ||= TransactionState.tl_get
         data = state.sql_sampler_transaction_data
         return unless data
@@ -148,7 +148,20 @@ module NewRelic
         if state.is_sql_recorded?
           if duration > Agent.config[:'slow_sql.explain_threshold']
             backtrace = caller.join("\n")
-            statement = Database::Statement.new(sql, config, explainer)
+            statement = Database::Statement.new(sql, config, explainer, binds, name)
+            data.sql_data << SlowSql.new(statement, metric_name, duration, backtrace)
+          end
+        end
+      end
+
+      def notice_sql_statement(statement, metric_name, duration)
+        state ||= TransactionState.tl_get
+        data = state.sql_sampler_transaction_data
+        return unless data
+
+        if state.is_sql_recorded?
+          if duration > Agent.config[:'slow_sql.explain_threshold']
+            backtrace = caller.join("\n")
             data.sql_data << SlowSql.new(statement, metric_name, duration, backtrace)
           end
         end
@@ -223,6 +236,20 @@ module NewRelic
         statement.sql
       end
 
+      def base_params
+        params = {}
+
+        if NewRelic::Agent.config[:'datastore_tracer.instance_reporting.enabled']
+          params[:host] = statement.host if statement.host
+          params[:port_path_or_id] = statement.port_path_or_id if statement.port_path_or_id
+        end
+        if NewRelic::Agent.config[:'datastore_tracer.database_name_reporting.enabled'] && statement.database_name
+          params[:database_name] = statement.database_name
+        end
+
+        params
+      end
+
       def obfuscate
         NewRelic::Agent::Database.obfuscate_sql(statement)
       end
@@ -234,7 +261,7 @@ module NewRelic
 
       def explain
         if statement.config && statement.explainer
-          NewRelic::Agent::Database.explain_sql(statement.sql, statement.config, statement.explainer)
+          NewRelic::Agent::Database.explain_sql(statement)
         end
       end
 
@@ -255,7 +282,7 @@ module NewRelic
 
       def initialize(normalized_query, slow_sql, path, uri)
         super()
-        @params = {}
+        @params = slow_sql.base_params
         @sql_id = consistent_hash(normalized_query)
         set_primary slow_sql, path, uri
         record_data_point(float(slow_sql.duration))

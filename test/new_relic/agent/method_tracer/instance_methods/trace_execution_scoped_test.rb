@@ -11,15 +11,6 @@ class NewRelic::Agent::MethodTracer::TraceExecutionScopedTest < Minitest::Test
     NewRelic::Agent.agent.stats_engine.clear_stats
   end
 
-  def test_metric_recording_outside_transaction
-    trace_execution_scoped(['foo']) do
-      # meh
-    end
-    assert_metrics_recorded_exclusive(
-      'foo' => { :call_count => 1 }
-    )
-  end
-
   def test_metric_recording_in_non_nested_transaction
     in_transaction('outer') do
       trace_execution_scoped(['foo', 'bar']) do
@@ -32,7 +23,8 @@ class NewRelic::Agent::MethodTracer::TraceExecutionScopedTest < Minitest::Test
       ['foo', 'outer'] => expected_values,
       'foo'            => expected_values,
       'bar'            => expected_values,
-      'outer'          => expected_values
+      'outer'          => expected_values,
+      'Supportability/API/trace_execution_scoped' => expected_values
     )
   end
 
@@ -57,7 +49,8 @@ class NewRelic::Agent::MethodTracer::TraceExecutionScopedTest < Minitest::Test
 
       ['foo'                    , 'Controller/inner_txn'] => expected_values,
       'foo'                                               => expected_values,
-      'bar'                                               => expected_values
+      'bar'                                               => expected_values,
+      'Supportability/API/trace_execution_scoped' => expected_values
     )
   end
 
@@ -90,7 +83,8 @@ class NewRelic::Agent::MethodTracer::TraceExecutionScopedTest < Minitest::Test
       'outer'          => expected_values,
       'foo'            => expected_values,
       ['foo', 'outer'] => expected_values,
-      'bar'            => expected_values
+      'bar'            => expected_values,
+      'Supportability/API/trace_execution_scoped' => expected_values
     )
   end
 
@@ -104,44 +98,9 @@ class NewRelic::Agent::MethodTracer::TraceExecutionScopedTest < Minitest::Test
     end
 
     expected_values = { :call_count => 1 }
-    assert_metrics_recorded_exclusive('outer' => expected_values)
-  end
-
-  def test_log_errors_base
-    ran = false
-    NewRelic::Agent::MethodTracerHelpers.log_errors("name") do
-      ran = true
-    end
-    assert ran, "should run the contents of the block"
-  end
-
-  def test_log_errors_with_return
-    ran = false
-    return_val = NewRelic::Agent::MethodTracerHelpers.log_errors('name') do
-      ran = true
-      'happy trees'
-    end
-
-    assert ran, "should run contents of block"
-    assert_equal 'happy trees', return_val, "should return contents of the block"
-  end
-
-  def test_log_errors_with_error
-    expects_logging(:error,
-      includes("Caught exception in name."),
-      instance_of(RuntimeError))
-
-    NewRelic::Agent::MethodTracerHelpers.log_errors("name") do
-      raise "should not propagate out of block"
-    end
-  end
-
-  def test_trace_execution_scoped_header
-    state = NewRelic::Agent::TransactionState.tl_get
-    stack = state.traced_method_stack
-    NewRelic::Agent::MethodTracerHelpers.expects(:log_errors).with(:trace_execution_scoped_header).yields
-    stack.expects(:push_frame).with(state, :method_tracer, 1.0)
-    NewRelic::Agent::MethodTracerHelpers.trace_execution_scoped_header(state, 1.0)
+    assert_metrics_recorded_exclusive(
+      'outer' => expected_values,
+      'Supportability/API/trace_execution_scoped' => expected_values)
   end
 
   def test_trace_execution_scoped_calculates_exclusive_time
@@ -178,7 +137,8 @@ class NewRelic::Agent::MethodTracer::TraceExecutionScopedTest < Minitest::Test
         :call_count           =>  1,
         :total_call_time      => 10,
         :total_exclusive_time => 10,
-      }
+      },
+      'Supportability/API/trace_execution_scoped' => { call_count: 2 }
     )
   end
 

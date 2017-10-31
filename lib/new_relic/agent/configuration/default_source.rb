@@ -15,7 +15,11 @@ module NewRelic
         end
       end
 
-      class Boolean; end
+      class Boolean
+        def self.===(o)
+          TrueClass === o or FalseClass === o
+        end
+      end
 
       class DefaultSource
         attr_reader :defaults
@@ -104,7 +108,7 @@ module NewRelic
         def self.agent_enabled
           Proc.new {
             NewRelic::Agent.config[:enabled] &&
-            (NewRelic::Agent.config[:developer_mode] || NewRelic::Agent.config[:monitor_mode]) &&
+            (NewRelic::Agent.config[:test_mode] || NewRelic::Agent.config[:monitor_mode]) &&
             NewRelic::Agent::Autostart.agent_should_start?
           }
         end
@@ -121,13 +125,6 @@ module NewRelic
 
         def self.dispatcher
           Proc.new { NewRelic::Control.instance.local_env.discovered_dispatcher }
-        end
-
-        # On Rubies with string encodings support (1.9.x+), default to always
-        # normalize encodings since it's safest and fast. Without that support
-        # the conversions are too expensive, so only enable if overridden to.
-        def self.normalize_json_string_encodings
-          Proc.new { NewRelic::LanguageSupport.supports_string_encodings? }
         end
 
         def self.thread_profiler_enabled
@@ -281,19 +278,12 @@ module NewRelic
           :allowed_from_server => false,
           :description => 'When <code>true</code>, the agent transmits data about your app to the New Relic <a href="https://docs.newrelic.com/docs/apm/new-relic-apm/getting-started/glossary#collector">collector</a>.'
         },
-        :developer_mode => {
-          :default => value_of(:developer),
-          :public => true,
-          :type => Boolean,
-          :allowed_from_server => false,
-          :description => 'When <code>true</code>, enables developer mode, a local analytics package built into the agent for rack applications. Access developer mode analytics by visiting <b>/newrelic</b> in your application.'
-        },
-        :developer => {
+        :test_mode => {
           :default => false,
           :public => false,
           :type => Boolean,
           :allowed_from_server => false,
-          :description => 'Alternative method of enabling developer_mode.'
+          :description => 'Used in tests for agent to start up but not connect to collector. Formerly used <code>developer_mode</code> in test config for this purpose.'
         },
         :log_level => {
           :default => 'info',
@@ -329,7 +319,7 @@ module NewRelic
           :default => 8080,
           :allow_nil => true,
           :public => true,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => false,
           :description => 'Defines a port for communicating with the New Relic <a href="https://docs.newrelic.com/docs/apm/new-relic-apm/getting-started/glossary#collector">collector</a> via a proxy server.'
         },
@@ -356,7 +346,7 @@ module NewRelic
           :public => true,
           :type => Boolean,
           :allowed_from_server => false,
-          :description => 'When <code>true</code>, the agent captures HTTP request parameters and attaches them to transaction traces and traced errors.'
+          :description => 'When <code>true</code>, the agent captures HTTP request parameters and attaches them to transaction traces, traced errors, and <a href="https://docs.newrelic.com/docs/insights/new-relic-insights/decorating-events/error-event-default-attributes-insights">TransactionError events</a>.'
         },
         :config_path => {
           :default => DefaultSource.config_path,
@@ -432,16 +422,9 @@ module NewRelic
         :'rake.connect_timeout' => {
           :default => 10,
           :public => true,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => false,
           :description => 'Timeout for waiting on connect to complete before a rake task'
-        },
-        :'profiling.available' => {
-          :default => DefaultSource.profiling_available,
-          :public => false,
-          :type => Boolean,
-          :allowed_from_server => false,
-          :description => 'Determines if ruby-prof is available for developer mode profiling.'
         },
         :apdex_t => {
           :default => 0.5,
@@ -483,14 +466,14 @@ module NewRelic
         :port => {
           :default => DefaultSource.port,
           :public => false,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => false,
           :description => 'Port for the New Relic data collection service.'
         },
         :api_port => {
           :default => value_of(:port),
           :public => false,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => false,
           :description => 'Port for the New Relic API host.'
         },
@@ -511,14 +494,35 @@ module NewRelic
         :post_size_limit => {
           :default => 2 * 1024 * 1024, # 2MB
           :public => false,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => true,
           :description => 'Maximum number of bytes to send to the New Relic data collection service.'
+        },
+        :put_for_data_send => {
+          :default => false,
+          :public => false,
+          :type => Boolean,
+          :allowed_from_server => false,
+          :description => 'Use HTTP PUT requests instead of POST.'
+        },
+        :compressed_content_encoding => {
+          :default => 'deflate',
+          :public => false,
+          :type => String,
+          :allowed_from_server => false,
+          :description => 'Encoding to use if data needs to be compressed. The options are deflate and gzip.'
+        },
+        :simple_compression => {
+          :default => false,
+          :public => false,
+          :type => Boolean,
+          :allowed_from_server => false,
+          :description => 'When enabled the agent will compress payloads destined for the collector, but will not pre-compress parts of the payload.'
         },
         :timeout => {
           :default => 2 * 60, # 2 minutes
           :public => true,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => false,
           :description => 'Defines the maximum number of seconds the agent should spend attempting to connect to the collector.'
         },
@@ -532,14 +536,14 @@ module NewRelic
         :data_report_period => {
           :default => 60,
           :public => false,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => true,
           :description => 'Number of seconds betwixt connections to the New Relic data collection service. Note that transaction events have a separate report period, specified by data_report_periods.analytic_event_data.'
         },
         :'data_report_periods.analytic_event_data' => {
           :default => 60,
           :public => false,
-          :type => Fixnum,
+          :type => Integer,
           :dynamic_name => true,
           :allowed_from_server => true,
           :description => 'Number of seconds between connections to the New Relic data collection service for sending transaction event data.'
@@ -651,13 +655,6 @@ module NewRelic
           :allowed_from_server => false,
           :description => 'If <code>true</code>, disables view instrumentation.'
         },
-        :disable_backtrace_cleanup => {
-          :default => false,
-          :public => true,
-          :type => Boolean,
-          :allowed_from_server => false,
-          :description => 'If <code>true</code>, the agent won\'t remove <code>newrelic_rpm</code> from backtraces.'
-        },
         :disable_harvest_thread => {
           :default => false,
           :public => false,
@@ -693,6 +690,14 @@ module NewRelic
           :dynamic_name => true,
           :allowed_from_server => false,
           :description => 'If <code>true</code>, disables ActiveJob instrumentation.'
+        },
+        :disable_action_cable_instrumentation => {
+          :default => false,
+          :public => true,
+          :type => Boolean,
+          :dynamic_name => true,
+          :allowed_from_server => false,
+          :description => 'If <code>true</code>, disables Action Cable instrumentation.'
         },
         :disable_memcached => {
           :default => value_of(:disable_memcache_instrumentation),
@@ -828,7 +833,7 @@ module NewRelic
         :'transaction_tracer.limit_segments' => {
           :default => 4000,
           :public => true,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => true,
           :description => 'Maximum number of transaction trace nodes to record in a single transaction trace.'
         },
@@ -868,6 +873,13 @@ module NewRelic
           :type         => Boolean,
           :allowed_from_server => false,
           :description  => 'Disables installation of Redis instrumentation. Standard key to use is disable_redis.'
+        },
+        :'message_tracer.segment_parameters.enabled' => {
+          :default      => true,
+          :public       => true,
+          :type         => Boolean,
+          :allowed_from_server => true,
+          :description  => 'If <code>true</code>, the agent will collect metadata about messages and attach them as segment parameters.'
         },
         :'slow_sql.enabled' => {
           :default => value_of(:'transaction_tracer.enabled'),
@@ -950,7 +962,7 @@ module NewRelic
         :'error_collector.max_event_samples_stored' => {
           :default => 100,
           :public => true,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => true,
           :description => 'Defines the maximum number of <a href="https://docs.newrelic.com/docs/insights/new-relic-insights/decorating-events/error-event-default-attributes-insights">TransactionError events</a> sent to Insights per harvest cycle.'
         },
@@ -1123,7 +1135,7 @@ module NewRelic
         :'xray_session.max_samples' => {
           :default => 10,
           :public => false,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => true,
           :description => 'Maximum number of transaction traces to buffer for active X-Ray sessions'
         },
@@ -1151,7 +1163,7 @@ module NewRelic
         :'analytics_events.max_samples_stored' => {
           :default => 1200,
           :public => true,
-          :type => Fixnum,
+          :type => Integer,
           :allowed_from_server => true,
           :description => 'Defines the maximum number of request events reported from a single harvest.'
         },
@@ -1171,7 +1183,7 @@ module NewRelic
           :description => 'Controls whether to check on running a transaction whether to respawn the harvest thread.'
         },
         :normalize_json_string_encodings => {
-          :default => DefaultSource.normalize_json_string_encodings,
+          :default => true,
           :public => false,
           :type => Boolean,
           :allowed_from_server => false,
@@ -1216,6 +1228,22 @@ module NewRelic
           :dynamic_name => true,
           :allowed_from_server => false,
           :description  => 'If <code>true</code>, disables instrumentation for ActiveRecord 4.'
+        },
+        :disable_active_record_5 => {
+          :default      => false,
+          :public       => true,
+          :type         => Boolean,
+          :dynamic_name => true,
+          :allowed_from_server => false,
+          :description  => 'If <code>true</code>, disables instrumentation for ActiveRecord 5.'
+        },
+        :disable_bunny => {
+          :default      => false,
+          :public       => true,
+          :type         => Boolean,
+          :dynamic_name => true,
+          :allowed_from_server => false,
+          :description  => 'If <code>true</code>, disables instrumentation for the bunny gem.'
         },
         :disable_curb => {
           :default      => false,
@@ -1281,14 +1309,6 @@ module NewRelic
           :allowed_from_server => false,
           :description  => 'If <code>true</code>, prevents the agent from hooking into Puma::Rack::URLMap to install middleware tracing.'
         },
-        :disable_rubyprof => {
-          :default      => false,
-          :public       => true,
-          :type         => Boolean,
-          :dynamic_name => true,
-          :allowed_from_server => false,
-          :description  => 'If <code>true</code>, the agent won\'t use RubyProf in developer mode.'
-        },
         :disable_typhoeus => {
           :default      => false,
           :public       => true,
@@ -1296,6 +1316,14 @@ module NewRelic
           :dynamic_name => true,
           :allowed_from_server => false,
           :description  => 'If <code>true</code>, the agent won\'t install instrumentation for the typhoeus gem.'
+        },
+        :disable_httprb => {
+          :default      => false,
+          :public       => true,
+          :type         => Boolean,
+          :dynamic_name => true,
+          :allowed_from_server => false,
+          :description  => 'If <code>true</code>, the agent won\'t install instrumentation for the http.rb gem.'
         },
         :disable_middleware_instrumentation => {
           :default      => false,
@@ -1350,7 +1378,7 @@ module NewRelic
         :keep_alive_timeout => {
           :default      => 60,
           :public       => false,
-          :type         => Fixnum,
+          :type         => Integer,
           :allowed_from_server => true,
           :description  => 'Timeout for keep alive on TCP connection to collector if supported by Ruby version. Only used in conjunction when aggressive_keepalive is enabled.'
         },
@@ -1373,14 +1401,14 @@ module NewRelic
         :'synthetics.traces_limit' => {
           :default      => 20,
           :public       => false,
-          :type         => Fixnum,
+          :type         => Integer,
           :allowed_from_server => true,
           :description  => 'Maximum number of synthetics transaction traces to hold for a given harvest'
         },
         :'synthetics.events_limit' => {
           :default      => 200,
           :public       => false,
-          :type         => Fixnum,
+          :type         => Integer,
           :allowed_from_server => true,
           :description  => 'Maximum number of synthetics transaction events to hold for a given harvest'
         },
@@ -1394,7 +1422,7 @@ module NewRelic
         :'custom_insights_events.max_samples_stored' => {
           :default      => 1000,
           :public       => true,
-          :type         => Fixnum,
+          :type         => Integer,
           :allowed_from_server => true,
           :description  => 'Specify a maximum number of custom Insights events to buffer in memory at a time.',
           :dynamic_name => true
@@ -1533,7 +1561,32 @@ module NewRelic
           :public      => true,
           :type        => Boolean,
           :allowed_from_server => false,
+          :dynamic_name => true,
           :description => 'If <code>true</code>, the agent automatically detects that it is running in an AWS environment.'
+        },
+        :'utilization.detect_azure' => {
+          :default      => true,
+          :public       => true,
+          :type         => Boolean,
+          :allowed_from_server => false,
+          :dynamic_name => true,
+          :description  => 'If <code>true</code>, the agent automatically detects that it is running in an Azure environment.'
+        },
+        :'utilization.detect_gcp' => {
+          :default     => true,
+          :public      => true,
+          :type        => Boolean,
+          :allowed_from_server => false,
+          :dynamic_name => true,
+          :description => 'If <code>true</code>, the agent automatically detects that it is running in an Google Cloud Platform environment.'
+        },
+        :'utilization.detect_pcf' => {
+          :default     => true,
+          :public      => true,
+          :type        => Boolean,
+          :allowed_from_server => false,
+          :dynamic_name => true,
+          :description => 'If <code>true</code>, the agent automatically detects that it is running in a Pivotal Cloud Foundry environment.'
         },
         :'utilization.detect_docker' => {
           :default     => true,
@@ -1542,12 +1595,50 @@ module NewRelic
           :allowed_from_server => false,
           :description => 'If <code>true</code>, the agent automatically detects that it is running in Docker.'
         },
-        :'disable_utilization' => {
-          :default     => false,
+        :'utilization.billing_hostname' => {
+          :default     => nil,
+          :allow_nil   => true,
           :public      => false,
+          :type        => String,
+          :allowed_from_server => false,
+          :description => 'The configured server name by a customer.'
+        },
+        :'utilization.logical_processors' => {
+          :default     => nil,
+          :allow_nil   => true,
+          :public      => false,
+          :type        => Integer,
+          :allowed_from_server => false,
+          :description => 'The total number of hyper-threaded execution contexts available.'
+        },
+        :'utilization.total_ram_mib' => {
+          :default     => nil,
+          :allow_nil   => true,
+          :public      => false,
+          :type        => Integer,
+          :allowed_from_server => false,
+          :description => 'This value represents the total amount of memory available to the host (not the process), in mebibytes (1024 squared or 1,048,576 bytes).'
+        },
+        :'datastore_tracer.instance_reporting.enabled' => {
+          :default     => true,
+          :public      => true,
           :type        => Boolean,
           :allowed_from_server => false,
-          :description => 'Disable sending utilization data as part of connect settings hash.'
+          :description => 'If <code>false</code>, the agent will not report datastore instance metrics, nor add <code>host</code> or <code>port_path_or_id</code> parameters to transaction or slow sql traces.'
+        },
+        :'datastore_tracer.database_name_reporting.enabled' => {
+          :default     => true,
+          :public      => true,
+          :type        => Boolean,
+          :allowed_from_server => false,
+          :description => 'If <code>false</code>, the agent will not add <code>database_name</code> parameter to transaction or slow sql traces.'
+        },
+        :'clear_transaction_state_after_fork' => {
+          :default     => false,
+          :public      => true,
+          :type        => Boolean,
+          :allowed_from_server => false,
+          :description => 'If <code>true</code>, the agent will clear <code>TransactionState</code> in <code>Agent.drop_buffered_data</code>.'
         }
       }.freeze
     end

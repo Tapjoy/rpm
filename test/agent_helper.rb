@@ -5,6 +5,8 @@
 # These helpers should not have any gem dependencies except on newrelic_rpm
 # itself, and should be usable from within any multiverse suite.
 
+require 'json'
+
 class ArrayLogDevice
   def initialize( array=[] )
     @array = array
@@ -43,6 +45,14 @@ end
 
 def last_traced_error
   harvest_error_traces!.last
+end
+
+def harvest_transaction_events!
+  NewRelic::Agent.instance.transaction_event_aggregator.harvest!
+end
+
+def last_transaction_event
+  harvest_transaction_events!.last.last
 end
 
 unless defined?( assert_block )
@@ -217,6 +227,23 @@ def assert_metrics_recorded_exclusive(expected, options={})
   assert_equal(0, unexpected_metrics.size, "Found unexpected metrics: #{format_metric_spec_list(unexpected_metrics)}")
 end
 
+# The clear_metrics! method prevents metrics from "leaking" between tests by resetting
+# the @stats_hash instance variable in the current instance of NewRelic::Agent::StatsEngine.
+
+module NewRelic
+  module Agent
+    class StatsEngine
+      def reset_for_test!
+        @stats_hash = StatsHash.new
+      end
+    end
+  end
+end
+
+def clear_metrics!
+  NewRelic::Agent.instance.stats_engine.reset_for_test!
+end
+
 def assert_metrics_not_recorded(not_expected)
   not_expected = _normalize_metric_expectations(not_expected)
   found_but_not_expected = []
@@ -330,7 +357,7 @@ end
 
 def refute_contains_request_params(attributes)
   attributes.keys.each do |key|
-    refute_match /^request\.parameters\./, key.to_s
+    refute_match(/^request\.parameters\./, key.to_s)
   end
 end
 
@@ -600,7 +627,7 @@ ensure
 end
 
 def json_dump_and_encode(object)
-  Base64.encode64(NewRelic::JSONWrapper.dump(object))
+  Base64.encode64(::JSON.dump(object))
 end
 
 def get_last_analytics_event
@@ -622,18 +649,13 @@ def cross_agent_tests_dir
   File.expand_path(File.join(File.dirname(__FILE__), 'fixtures', 'cross_agent_tests'))
 end
 
-def replace_camelcase(contents)
-  { "callCount" => "call_count" }.each_pair do |original, replacement|
-    contents.gsub!(original, replacement)
-  end
-  contents
-end
-
 def load_cross_agent_test(name)
   test_file_path = File.join(cross_agent_tests_dir, "#{name}.json")
   data = File.read(test_file_path)
-  data = replace_camelcase(data)
-  NewRelic::JSONWrapper.load(data)
+  data.gsub!('callCount', 'call_count')
+  data = ::JSON.load(data)
+  data.each { |testcase| testcase['testname'].gsub! ' ', '_' if String === testcase['testname'] }
+  data
 end
 
 def each_cross_agent_test(options)

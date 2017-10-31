@@ -8,7 +8,7 @@ require 'rack'
 require 'rack/handler'
 require 'timeout'
 
-require 'json' if RUBY_VERSION >= '1.9'
+require 'json'
 
 module NewRelic
   class FakeServer
@@ -37,7 +37,7 @@ module NewRelic
     def initialize(port=DEFAULT_PORT)
       @port    = port
       @thread  = nil
-      @sever   = nil
+      @server  = nil
       @use_ssl = false
     end
 

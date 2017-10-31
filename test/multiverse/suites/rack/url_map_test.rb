@@ -11,6 +11,10 @@ if NewRelic::Agent::Instrumentation::RackHelpers.version_supported?
 class UrlMapTest < Minitest::Test
   include MultiverseHelpers
 
+  def setup
+    NewRelic::Agent.drop_buffered_data
+  end
+
   def teardown
     NewRelic::Agent.drop_buffered_data
   end
@@ -98,6 +102,7 @@ class UrlMapTest < Minitest::Test
       'Apdex/Rack/UrlMapTest::PrefixAppOne/call',
       'Middleware/Rack/UrlMapTest::MiddlewareOne/call',
       'Middleware/Rack/UrlMapTest::MiddlewareTwo/call',
+      'Supportability/API/drop_buffered_data',
       nested_controller_metric,
       'Nested/Controller/Rack/UrlMapTest::PrefixAppOne/call',
       ['Middleware/Rack/UrlMapTest::MiddlewareOne/call', 'Controller/Rack/UrlMapTest::PrefixAppOne/call'],
@@ -119,6 +124,7 @@ class UrlMapTest < Minitest::Test
       'Apdex/Rack/UrlMapTest::PrefixAppTwo/call',
       'Middleware/Rack/UrlMapTest::MiddlewareOne/call',
       'Middleware/Rack/UrlMapTest::MiddlewareTwo/call',
+      'Supportability/API/drop_buffered_data',
       nested_controller_metric,
       'Nested/Controller/Rack/UrlMapTest::PrefixAppTwo/call',
       ['Middleware/Rack/UrlMapTest::MiddlewareOne/call', 'Controller/Rack/UrlMapTest::PrefixAppTwo/call'],
