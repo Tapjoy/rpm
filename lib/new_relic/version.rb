@@ -10,9 +10,10 @@ module NewRelic
       parts.compact.join('.')
     end
 
-    MAJOR = 4
-    MINOR = 5
-    TINY  = 0
+    MAJOR  = 4
+    MINOR  = 5
+    TINY   = 0
+    TAPJOY = 1
 
     begin
       require File.join(File.dirname(__FILE__), 'build')
@@ -20,6 +21,6 @@ module NewRelic
       BUILD = nil
     end
 
-    STRING = build_version_string(MAJOR, MINOR, TINY, BUILD)
+    STRING = build_version_string(MAJOR, MINOR, TINY, BUILD, TAPJOY)
   end
 end
