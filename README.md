@@ -1,3 +1,10 @@
+# DEPRECATED
+
+
+This fork is deprecated.
+
+Keeping it around for the sake of posterity and the fixes that would be needed should we ever reconsider the ForkerWorkerStrategy
+
 # New Relic Ruby Agent
 
 New Relic is a performance management system, developed by
